@@ -8,12 +8,11 @@ function processEmails() {
   if (!label) {
     throw new Error('Label "' + labelName + '" does not exist in Gmail.');
   }
-  const threads = label.getThreads(0, 50);
-  threads.forEach((thread) => {
-    const messages = thread.getMessages();
 
-    messages.forEach((element) => {
-      const msg = messages[j];
+  const query = `label:${labelName} newer_than:1d`;
+  GmailApp.search(query).forEach((thread) => {
+    const messages = thread.getMessages();
+    messages.forEach((msg) => {
       const body = msg.getBody();
       const urlMatch = body.match(
         /href="(https:\/\/www\.tadpoles\.com\/[^"]+)"/,
