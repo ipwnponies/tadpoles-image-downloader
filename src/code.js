@@ -15,7 +15,7 @@ function processEmails() {
     messages.forEach((msg) => {
       const body = msg.getBody();
       const urlMatch = body.match(
-        /href="(https:\/\/www\.tadpoles\.com\/[^"]+)"/,
+        new RegExp('href="(https://www\\.tadpoles\\.com/m/p/[^"]+)"'),
       );
       if (!urlMatch) {
         return;
