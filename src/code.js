@@ -1,6 +1,10 @@
 const config = PropertiesService.getScriptProperties().getProperties();
 
-function processEmails() {
+function forRealsies() {
+  processEmails(false);
+}
+
+function processEmails(dryRun = true) {
   var labelName = config.label_name;
 
   const label = GmailApp.getUserLabelByName(labelName);
@@ -20,7 +24,7 @@ function processEmails() {
         return;
       }
       const url = urlMatch[1];
-      enqueue(url, msg.getId());
+      enqueue(url, msg.getId(), dryRun);
     });
   });
 }
