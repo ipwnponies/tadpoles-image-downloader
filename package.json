@@ -10,6 +10,11 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "@google/clasp": "^3.0.6-alpha"
+    "@eslint/js": "^9.35.0",
+    "@google/clasp": "^3.0.6-alpha",
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^16.4.0",
+    "prettier-eslint": "^16.4.2"
   }
 }
