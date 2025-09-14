@@ -1,3 +1,13 @@
+/**
+ * Tadpoles Image Downloader Script
+ *
+ * This script searches Gmail for Tadpoles image links, extracts URLs from messages,
+ * and queues.
+ *
+ * Usage:
+ * - Configure search query and run in Google Apps Script environment
+ */
+
 const config = PropertiesService.getScriptProperties().getProperties();
 
 function forRealsies() {
