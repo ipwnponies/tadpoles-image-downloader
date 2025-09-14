@@ -1,8 +1,7 @@
-const DRIVE_FOLDER_ID = "YOUR_DRIVE_FOLDER_ID";
+const config = PropertiesService.getScriptProperties().getProperties();
 
 function processEmails() {
-  var config = PropertiesService.getScriptProperties().getProperties();
-  var labelName = config.LABEL_NAME;
+  var labelName = config.label_name;
 
   const label = GmailApp.getUserLabelByName(labelName);
   if (!label) {
@@ -32,10 +31,13 @@ function enqueue(url, id, dryRun = true) {
     timestamp: new Date().toISOString(),
   };
   const fileName = `task_${id}.json`;
+  const folder = DriveApp.getFolderById(config.drive_folder_id);
+
   if (dryRun) {
-    Logger.log("Dry run: would save task to " + fileName);
+    const fullPath = folder.getName() + "/" + fileName;
+    Logger.log("Dry run: would save task to " + fullPath);
     Logger.log(JSON.stringify(task, null, 2));
   } else {
-    // TODO: Actual save logic here
+    folder.createFile(fileName, JSON.stringify(task), MimeType.PLAIN_TEXT);
   }
 }
