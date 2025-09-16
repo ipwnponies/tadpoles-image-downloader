@@ -1,0 +1,22 @@
+[project]
+name = "tadpoles-image-downloader"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "John Nguyen",email = "ipwnponies@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.12,<4.0"
+dependencies = [
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.group.dev.dependencies]
+pudb = "^2025.1"
+ipython = "^9.5.0"
+ruff = "^0.13.0"
+
