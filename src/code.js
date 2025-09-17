@@ -44,7 +44,7 @@ function enqueue(urls, dryRun = true) {
     urls: urls,
     timestamp: new Date().toISOString(),
   };
-  const filename = `images_${new Date().toLocaleDateString("en-CA")}.json`;
+  const filename = `${new Date().toLocaleDateString("en-CA")}.json`;
   const folder = DriveApp.getFolderById(config.drive_folder_id);
 
   if (dryRun) {
