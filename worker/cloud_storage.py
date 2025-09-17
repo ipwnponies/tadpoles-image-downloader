@@ -14,7 +14,6 @@ if typing.TYPE_CHECKING:
 
 SCOPES = [
     "https://www.googleapis.com/auth/photoslibrary.appendonly",
-    "https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata",
 ]
 
 CREDENTIALS_FILE = Path("client.json")
@@ -69,7 +68,7 @@ def upload_to_google_photos(image_path: Path) -> str:
     return upload_token
 
 
-def add_to_album(upload_tokens: Iterable[str], album_id: str) -> None:
+def mint(upload_tokens: Iterable[str]) -> None:
     # Create media item and attach to album
     create_item = {
         "newMediaItems": [
@@ -79,7 +78,6 @@ def add_to_album(upload_tokens: Iterable[str], album_id: str) -> None:
             }
             for i in upload_tokens
         ],
-        "albumId": album_id,
     }
 
     resp = requests_session().post(
