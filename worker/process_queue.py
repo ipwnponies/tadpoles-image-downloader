@@ -7,18 +7,9 @@ import shutil
 
 import typer
 
-# Adjust these paths to your synced Google Drive folders
-QUEUE_DIR = Path.home() / "GoogleDrive/EmailTasks"
-DONE_DIR = QUEUE_DIR / "processed"
-IMAGES_DIR = Path.home() / "Downloads/email_images"
 
-# Ensure directories exist
-DONE_DIR.mkdir(parents=True, exist_ok=True)
-IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def process_file(file_path: Path):
     with open(file_path, "r", encoding="utf-8") as f:
+def process_file(file_path: Path, done_dir: Path, images_dir: Path, dry_run: bool):
         data = json.load(f)
 
     urls = data.get("urls", [])
@@ -58,9 +49,18 @@ def process_file(file_path: Path):
     shutil.move(str(file_path), DONE_DIR / file_path.name)
 
 
-def main():
-    for file_path in QUEUE_DIR.glob("*.json"):
-        process_file(file_path)
+def main(
+    queue_dir: Path = typer.Option(..., help="Path to queue directory"),
+    done_dir: Path = typer.Option(..., help="Path to done directory"),
+    images_dir: Path = typer.Option(..., help="Path to images directory"),
+    dry_run: bool = typer.Option(True, help="Print actions without making changes"),
+):
+    # Ensure directories exist
+    done_dir.mkdir(parents=True, exist_ok=True)
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    for file_path in queue_dir.glob("*.json"):
+        process_file(file_path, done_dir, images_dir, dry_run)
 
 
 if __name__ == "__main__":
