@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 import requests
 import pickle
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -31,8 +32,10 @@ def requests_session() -> requests.Session:
         pass
     else:
         if creds and creds.expired and creds.refresh_token:
+            logging.debug("Refreshing expired token")
             creds.refresh(Request())
         else:
+            logging.warning("Credentials are missing or invalid. Fetching new token")
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(CREDENTIALS_FILE), SCOPES
             )
@@ -46,7 +49,7 @@ def requests_session() -> requests.Session:
 
 
 def upload_to_google_photos(image_path: Path) -> str:
-    print(f"Uploading {image_path} to Google Photos")
+    logging.info(f"Uploading {image_path} to Google Photos")
     # Upload the image
     with image_path.open("rb") as img:
         upload_token = (

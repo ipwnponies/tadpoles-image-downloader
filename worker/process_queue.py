@@ -9,6 +9,10 @@ import typer
 
 from worker.cloud_storage import mint, upload_to_google_photos
 
+import logging
+
+logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s")
+
 
 def process_file(file_path: Path, done_dir: Path, images_dir: Path, dry_run: bool):
     with open(file_path) as f:
@@ -30,7 +34,7 @@ def process_file(file_path: Path, done_dir: Path, images_dir: Path, dry_run: boo
             with open(images_dir / filename, "wb") as out:
                 out.write(resp.content)
 
-        print(f"Downloaded: {filename}")
+        logging.info(f"Downloaded: {filename}")
 
     # Move processed JSON to Done
     if not dry_run:
