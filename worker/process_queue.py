@@ -4,7 +4,6 @@ import mimetypes
 from pathlib import Path
 from urllib.parse import urlparse
 import requests
-import shutil
 
 import typer
 
@@ -35,7 +34,7 @@ def process_file(file_path: Path, done_dir: Path, images_dir: Path, dry_run: boo
 
     # Move processed JSON to Done
     if not dry_run:
-        shutil.move(str(file_path), done_dir / file_path.name)
+        file_path.replace(done_dir / file_path.name)
 
 
 def main(
@@ -46,19 +45,21 @@ def main(
     done_dir = queue_dir / "Done"
 
     # Ensure directories exist
-    done_dir.mkdir(parents=True, exist_ok=True)
-    images_dir.mkdir(parents=True, exist_ok=True)
+    done_dir.mkdir(exist_ok=True)
+    images_dir.mkdir(exist_ok=True)
 
     for file_path in queue_dir.glob("*.json"):
         process_file(file_path, done_dir, images_dir, dry_run)
 
     if not dry_run:
-        upload_tokens = [
-            upload_to_google_photos(image)
-            for image in images_dir.iterdir()
-            if image.is_file()
-        ]
+        images = [i for i in images_dir.iterdir() if i.is_file()]
+        upload_tokens = [upload_to_google_photos(i) for i in images]
         mint(upload_tokens)
+
+        done_dir = images_dir / "Done"
+        done_dir.mkdir(exist_ok=True)
+        for image in images:
+            image.replace(done_dir / image.name)
 
 
 if __name__ == "__main__":
