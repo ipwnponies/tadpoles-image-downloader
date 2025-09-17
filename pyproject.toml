@@ -21,4 +21,7 @@ build-backend = "poetry.core.masonry.api"
 pudb = "^2025.1"
 ipython = "^9.5.0"
 ruff = "^0.13.0"
+typer = "^0.17.4"
 
+[tool.poetry.scripts]
+main = "worker.process_queue:app"

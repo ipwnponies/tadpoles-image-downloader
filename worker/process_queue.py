@@ -5,6 +5,8 @@ from bs4 import BeautifulSoup
 from pathlib import Path
 import shutil
 
+import typer
+
 # Adjust these paths to your synced Google Drive folders
 QUEUE_DIR = Path.home() / "GoogleDrive/EmailTasks"
 DONE_DIR = QUEUE_DIR / "processed"
@@ -62,4 +64,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    typer.run(main)
