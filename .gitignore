@@ -6,3 +6,4 @@ npm-debug.log*
 .DS_Store
 .clasp.json
 worker/__pycache__
+client.json
