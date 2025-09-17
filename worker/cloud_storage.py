@@ -5,8 +5,11 @@ from google.auth.transport.requests import Request
 
 import typing
 
+from functools import cache
+
 if typing.TYPE_CHECKING:
     from pathlib import Path
+    from typing import Iterable
 
 SCOPES = [
     "https://www.googleapis.com/auth/photoslibrary.appendonly",
@@ -17,7 +20,8 @@ CREDENTIALS_FILE = Path("credentials.json")
 TOKEN_FILE = Path("token_photos.pickle")
 
 
-def get_photos_session() -> requests.Session:
+@cache
+def requests_session() -> requests.Session:
     creds = None
     if TOKEN_FILE.exists():
         with TOKEN_FILE.open("rb") as token:
@@ -41,38 +45,43 @@ def get_photos_session() -> requests.Session:
     return session
 
 
-def upload_to_google_photos(image_path: Path, album_id) -> None:
-    session = get_photos_session()
-
+def upload_to_google_photos(image_path: Path) -> str:
     # Upload the image
     with image_path.open("rb") as img:
-        upload_token = session.post(
-            "https://photoslibrary.googleapis.com/v1/uploads",
-            data=img,
-            headers={
-                "Content-type": "application/octet-stream",
-                "X-Goog-Upload-File-Name": image_path.name,
-                "X-Goog-Upload-Protocol": "raw",
-            },
-        ).text
+        upload_token = (
+            requests_session()
+            .post(
+                "https://photoslibrary.googleapis.com/v1/uploads",
+                data=img,
+                headers={
+                    "Content-type": "application/octet-stream",
+                    "X-Goog-Upload-File-Name": image_path.name,
+                    "X-Goog-Upload-Protocol": "raw",
+                },
+            )
+            .text
+        )
 
     if not upload_token:
         raise Exception("Failed to get upload token")
+    return upload_token
 
-    # Step 2: Create media item (add to album if provided)
+
+def add_to_album(upload_tokens: Iterable[str], album_id: str) -> None:
+    # Create media item and attach to album
     create_item = {
         "newMediaItems": [
             {
                 "description": "Uploaded via script",
-                "simpleMediaItem": {"uploadToken": upload_token},
+                "simpleMediaItem": {"uploadToken": i},
             }
+            for i in upload_tokens
         ],
         "albumId": album_id,
     }
 
-    resp = session.post(
+    resp = requests_session().post(
         "https://photoslibrary.googleapis.com/v1/mediaItems:batchCreate",
         json=create_item,
     )
     resp.raise_for_status()
-    print(f"Uploaded {image_path} → Album {album_id or '(library only)'}")
