@@ -37,10 +37,11 @@ def process_file(file_path: Path, done_dir: Path, images_dir: Path, dry_run: boo
 
 def main(
     queue_dir: Path = typer.Option(..., help="Path to queue directory"),
-    done_dir: Path = typer.Option(..., help="Path to done directory"),
     images_dir: Path = typer.Option(..., help="Path to images directory"),
     dry_run: bool = typer.Option(True, help="Print actions without making changes"),
 ):
+    done_dir = queue_dir / "Done"
+
     # Ensure directories exist
     done_dir.mkdir(parents=True, exist_ok=True)
     images_dir.mkdir(parents=True, exist_ok=True)
