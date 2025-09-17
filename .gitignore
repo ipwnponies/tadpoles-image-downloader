@@ -6,4 +6,6 @@ npm-debug.log*
 .DS_Store
 .clasp.json
 worker/__pycache__
-client.json
+/client.json
+/token_photos.pickle
+/images/
