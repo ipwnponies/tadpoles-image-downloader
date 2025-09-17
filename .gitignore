@@ -5,3 +5,4 @@ build/
 npm-debug.log*
 .DS_Store
 .clasp.json
+worker/__pycache__
