@@ -1,3 +1,4 @@
+from __future__ import annotations
 import requests
 import pickle
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -5,10 +6,10 @@ from google.auth.transport.requests import Request
 
 import typing
 
+from pathlib import Path
 from functools import cache
 
 if typing.TYPE_CHECKING:
-    from pathlib import Path
     from typing import Iterable
 
 SCOPES = [
@@ -16,7 +17,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata",
 ]
 
-CREDENTIALS_FILE = Path("credentials.json")
+CREDENTIALS_FILE = Path("client.json")
 TOKEN_FILE = Path("token_photos.pickle")
 
 
@@ -46,6 +47,7 @@ def requests_session() -> requests.Session:
 
 
 def upload_to_google_photos(image_path: Path) -> str:
+    print(f"Uploading {image_path} to Google Photos")
     # Upload the image
     with image_path.open("rb") as img:
         upload_token = (

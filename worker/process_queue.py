@@ -1,3 +1,4 @@
+from __future__ import annotations
 import json
 import mimetypes
 from pathlib import Path
@@ -25,7 +26,7 @@ def process_file(file_path: Path, done_dir: Path, images_dir: Path, dry_run: boo
         filename = Path(urlparse(redirected_url).path).with_suffix(ext).name
 
         if not dry_run:
-            with open(images_dir / file_path.name / filename, "wb") as out:
+            with open(images_dir / filename, "wb") as out:
                 out.write(resp.content)
 
         print(f"Downloaded: {filename}")
