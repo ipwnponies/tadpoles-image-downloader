@@ -8,6 +8,8 @@ import shutil
 
 import typer
 
+from worker.cloud_storage import mint, upload_to_google_photos
+
 
 def process_file(file_path: Path, done_dir: Path, images_dir: Path, dry_run: bool):
     with open(file_path) as f:
@@ -49,6 +51,14 @@ def main(
 
     for file_path in queue_dir.glob("*.json"):
         process_file(file_path, done_dir, images_dir, dry_run)
+
+    if not dry_run:
+        upload_tokens = [
+            upload_to_google_photos(image)
+            for image in images_dir.iterdir()
+            if image.is_file()
+        ]
+        mint(upload_tokens)
 
 
 if __name__ == "__main__":
