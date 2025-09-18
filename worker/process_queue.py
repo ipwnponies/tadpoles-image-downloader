@@ -11,6 +11,7 @@ from PIL import Image
 import piexif
 from io import BytesIO
 import filetype
+from zoneinfo import ZoneInfo
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s")
 
@@ -21,10 +22,15 @@ def write_image_file(data: bytes, file: Path) -> None:
     # So it's actually the rare time where python datetime library is not woefully deficient.
     current_time = datetime.datetime.now().strftime("%Y:%m:%d %H:%M:%S")
 
+    now = datetime.datetime.now(ZoneInfo("America/Los_Angeles"))
+    offset = now.strftime("%z")  # e.g., "-0700" or "-0800"
+    offset_str = f"{offset[:3]}:{offset[3:]}"  # "-07:00" or "-08:00"
+
     exif = piexif.dump(
         {
             "Exif": {
                 piexif.ExifIFD.DateTimeDigitized: current_time,
+                piexif.ExifIFD.OffsetTimeOriginal: offset_str,
             }
         }
     )
