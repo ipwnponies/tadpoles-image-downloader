@@ -1,14 +1,14 @@
 from __future__ import annotations
+
 import logging
-import requests
 import pickle
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
-
 import typing
-
-from pathlib import Path
 from functools import cache
+from pathlib import Path
+
+import requests
+from google.auth.transport.requests import Request
+from google_auth_oauthlib.flow import InstalledAppFlow
 
 if typing.TYPE_CHECKING:
     from typing import Iterable
@@ -36,9 +36,7 @@ def requests_session() -> requests.Session:
             creds.refresh(Request())
         else:
             logging.warning("Credentials are missing or invalid. Fetching new token")
-            flow = InstalledAppFlow.from_client_secrets_file(
-                str(CREDENTIALS_FILE), SCOPES
-            )
+            flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_FILE), SCOPES)
             creds = flow.run_local_server(port=0)
         with TOKEN_FILE.open("wb") as token:
             pickle.dump(creds, token)

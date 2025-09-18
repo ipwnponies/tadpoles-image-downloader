@@ -1,16 +1,19 @@
 from __future__ import annotations
+
 import json
+import logging
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
-import requests
-import typer
-from worker.cloud_storage import mint, upload_to_google_photos
-import logging
-from PIL import Image
-import piexif
-from io import BytesIO
+
 import filetype
 import pendulum
+import piexif
+import requests
+import typer
+from PIL import Image
+
+from worker.cloud_storage import mint, upload_to_google_photos
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s")
 
@@ -23,9 +26,7 @@ def write_image_file(data: bytes, file: Path, tz="America/Los_Angeles") -> None:
     exif = piexif.dump(
         {
             "Exif": {
-                piexif.ExifIFD.DateTimeDigitized: current_time.format(
-                    "YYYY:MM:DD HH:mm:ss"
-                ),
+                piexif.ExifIFD.DateTimeDigitized: current_time.format("YYYY:MM:DD HH:mm:ss"),
                 piexif.ExifIFD.OffsetTimeOriginal: current_time.format("ZZ"),
             }
         }
