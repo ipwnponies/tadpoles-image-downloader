@@ -1,6 +1,5 @@
 from __future__ import annotations
 import json
-import mimetypes
 from pathlib import Path
 from urllib.parse import urlparse
 import requests
@@ -11,6 +10,7 @@ import datetime
 from PIL import Image
 import piexif
 from io import BytesIO
+import filetype
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s")
 
@@ -29,6 +29,13 @@ def write_image_file(data: bytes, file: Path) -> None:
         }
     )
 
+    if kind := filetype.guess(data):
+        ext = kind.extension
+    else:
+        logging.warn("Unknown format, assuming png")
+        ext = "png"
+    file = file.with_suffix(f".{ext}")
+
     img = Image.open(BytesIO(data))
     img.save(file, exif=exif)
 
@@ -44,10 +51,7 @@ def process_file(file_path: Path, done_dir: Path, images_dir: Path, dry_run: boo
 
         redirected_url = resp.url
 
-        content_type = resp.headers["Content-Type"]
-        if not (ext := mimetypes.guess_extension(content_type.split(";")[0])):
-            ext = ".jpg"  # Default to .jpg if unknown
-        filename = Path(urlparse(redirected_url).path).with_suffix(ext).name
+        filename = Path(urlparse(redirected_url).path).name
 
         if not dry_run:
             write_image_file(resp.content, images_dir / filename)
