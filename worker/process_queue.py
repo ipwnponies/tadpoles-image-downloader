@@ -4,14 +4,33 @@ import mimetypes
 from pathlib import Path
 from urllib.parse import urlparse
 import requests
-
 import typer
-
 from worker.cloud_storage import mint, upload_to_google_photos
-
 import logging
+import datetime
+from PIL import Image
+import piexif
+from io import BytesIO
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s")
+
+
+def write_image_file(data: bytes, file: Path) -> None:
+    """Write image data to file with current timestamp in EXIF metadata."""
+    # EXIF is timezone naive, just like datetime.
+    # So it's actually the rare time where python datetime library is not woefully deficient.
+    current_time = datetime.datetime.now().strftime("%Y:%m:%d %H:%M:%S")
+
+    exif = piexif.dump(
+        {
+            "Exif": {
+                piexif.ExifIFD.DateTimeDigitized: current_time,
+            }
+        }
+    )
+
+    img = Image.open(BytesIO(data))
+    img.save(file, exif=exif)
 
 
 def process_file(file_path: Path, done_dir: Path, images_dir: Path, dry_run: bool):
@@ -31,9 +50,7 @@ def process_file(file_path: Path, done_dir: Path, images_dir: Path, dry_run: boo
         filename = Path(urlparse(redirected_url).path).with_suffix(ext).name
 
         if not dry_run:
-            with open(images_dir / filename, "wb") as out:
-                out.write(resp.content)
-
+            write_image_file(resp.content, images_dir / filename)
         logging.info(f"Downloaded: {filename}")
 
     # Move processed JSON to Done
