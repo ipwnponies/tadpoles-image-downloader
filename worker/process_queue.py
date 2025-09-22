@@ -20,16 +20,26 @@ app = typer.Typer()
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s")
 
 
-def write_image_file(data: bytes, file: Path, tz="America/Los_Angeles") -> None:
-    """Write image data to file with current timestamp in EXIF metadata."""
+def write_image_file(
+    data: bytes,
+    file: Path,
+    taken_at: str,
+    tz: str = "America/Los_Angeles",
+) -> None:
+    """Write image data to file with timestamp in EXIF metadata."""
 
-    current_time = pendulum.now(tz)
+    current_time = pendulum.parse(taken_at)
+
+    timestamp = current_time.format("YYYY:MM:DD HH:mm:ss")
+    offset = current_time.format("ZZ")
 
     exif = piexif.dump(
         {
             "Exif": {
-                piexif.ExifIFD.DateTimeDigitized: current_time.format("YYYY:MM:DD HH:mm:ss"),
-                piexif.ExifIFD.OffsetTimeOriginal: current_time.format("ZZ"),
+                piexif.ExifIFD.DateTimeOriginal: timestamp,
+                piexif.ExifIFD.DateTimeDigitized: timestamp,
+                piexif.ExifIFD.OffsetTimeOriginal: offset,
+                piexif.ExifIFD.OffsetTimeDigitized: offset,
             }
         }
     )
@@ -49,7 +59,7 @@ def process_file(file_path: Path, done_dir: Path, images_dir: Path, dry_run: boo
     with open(file_path) as f:
         data = json.load(f)
 
-    for url in data["urls"]:
+    for url in data:
         # Setting query param d=t causes redirect to backing image
         resp = requests.get(url["url"], params={"d": "t"})
         resp.raise_for_status()
@@ -59,7 +69,11 @@ def process_file(file_path: Path, done_dir: Path, images_dir: Path, dry_run: boo
         filename = Path(urlparse(redirected_url).path).name
 
         if not dry_run:
-            write_image_file(resp.content, images_dir / filename)
+            write_image_file(
+                resp.content,
+                images_dir / filename,
+                taken_at=url["timestamp"],
+            )
         logging.info(f"Downloaded: {filename}")
 
     # Move processed JSON to Done

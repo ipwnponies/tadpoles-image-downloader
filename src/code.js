@@ -32,7 +32,11 @@ function processEmails(dryRun = true) {
           /href="(https:\/\/www\.tadpoles\.com\/m\/p\/[^"]+)"/,
         );
         if (!urlMatch) return null;
-        return { url: urlMatch[1], msgId: msg.getId() };
+        return {
+          url: urlMatch[1],
+          msgId: msg.getId(),
+          timestamp: msg.getDate(),
+        };
       })
       .filter(Boolean),
   );
@@ -40,18 +44,14 @@ function processEmails(dryRun = true) {
 }
 
 function enqueue(urls, dryRun = true) {
-  const task = {
-    urls: urls,
-    timestamp: new Date().toISOString(),
-  };
   const filename = `${new Date().toLocaleDateString("en-CA")}.json`;
   const folder = DriveApp.getFolderById(config.drive_folder_id);
 
   if (dryRun) {
     const fullPath = folder.getName() + "/" + filename;
     Logger.log("Dry run: would save task to " + fullPath);
-    Logger.log(JSON.stringify(task, null, 2));
+    Logger.log(JSON.stringify(urls, null, 2));
   } else {
-    folder.createFile(filename, JSON.stringify(task), MimeType.PLAIN_TEXT);
+    folder.createFile(filename, JSON.stringify(urls), MimeType.PLAIN_TEXT);
   }
 }
