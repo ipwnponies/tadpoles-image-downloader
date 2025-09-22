@@ -20,16 +20,29 @@ app = typer.Typer()
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s")
 
 
-def write_image_file(data: bytes, file: Path, tz="America/Los_Angeles") -> None:
-    """Write image data to file with current timestamp in EXIF metadata."""
+def write_image_file(
+    data: bytes,
+    file: Path,
+    taken_at: str | None = None,
+    tz: str = "America/Los_Angeles",
+) -> None:
+    """Write image data to file with timestamp in EXIF metadata."""
 
-    current_time = pendulum.now(tz)
+    if taken_at:
+        current_time = pendulum.parse(taken_at)
+    else:
+        current_time = pendulum.now(tz)
+
+    timestamp = current_time.format("YYYY:MM:DD HH:mm:ss")
+    offset = current_time.format("ZZ")
 
     exif = piexif.dump(
         {
             "Exif": {
-                piexif.ExifIFD.DateTimeDigitized: current_time.format("YYYY:MM:DD HH:mm:ss"),
-                piexif.ExifIFD.OffsetTimeOriginal: current_time.format("ZZ"),
+                piexif.ExifIFD.DateTimeOriginal: timestamp,
+                piexif.ExifIFD.DateTimeDigitized: timestamp,
+                piexif.ExifIFD.OffsetTimeOriginal: offset,
+                piexif.ExifIFD.OffsetTimeDigitized: offset,
             }
         }
     )
@@ -59,7 +72,12 @@ def process_file(file_path: Path, done_dir: Path, images_dir: Path, dry_run: boo
         filename = Path(urlparse(redirected_url).path).name
 
         if not dry_run:
-            write_image_file(resp.content, images_dir / filename)
+            batch_timestamp = data.get("timestamp") or data.get("generated_at")
+            write_image_file(
+                resp.content,
+                images_dir / filename,
+                taken_at=url.get("timestamp") or batch_timestamp,
+            )
         logging.info(f"Downloaded: {filename}")
 
     # Move processed JSON to Done

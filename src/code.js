@@ -10,6 +10,14 @@
 
 const config = PropertiesService.getScriptProperties().getProperties();
 
+function formatDateWithOffset(date) {
+  return Utilities.formatDate(
+    date,
+    Session.getScriptTimeZone(),
+    "yyyy-MM-dd'T'HH:mm:ssXXX",
+  );
+}
+
 function forRealsies() {
   processEmails(false);
 }
@@ -32,7 +40,11 @@ function processEmails(dryRun = true) {
           /href="(https:\/\/www\.tadpoles\.com\/m\/p\/[^"]+)"/,
         );
         if (!urlMatch) return null;
-        return { url: urlMatch[1], msgId: msg.getId() };
+        return {
+          url: urlMatch[1],
+          msgId: msg.getId(),
+          timestamp: formatDateWithOffset(msg.getDate()),
+        };
       })
       .filter(Boolean),
   );
@@ -40,9 +52,14 @@ function processEmails(dryRun = true) {
 }
 
 function enqueue(urls, dryRun = true) {
+  const generatedAt = formatDateWithOffset(new Date());
   const task = {
-    urls: urls,
-    timestamp: new Date().toISOString(),
+    urls: urls.map((entry) => ({
+      ...entry,
+      timestamp: entry.timestamp || generatedAt,
+    })),
+    generated_at: generatedAt,
+    timestamp: generatedAt,
   };
   const filename = `${new Date().toLocaleDateString("en-CA")}.json`;
   const folder = DriveApp.getFolderById(config.drive_folder_id);
