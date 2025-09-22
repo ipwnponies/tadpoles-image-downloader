@@ -15,6 +15,8 @@ from PIL import Image
 
 from worker.cloud_storage import mint, upload_to_google_photos
 
+app = typer.Typer()
+
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s")
 
 
@@ -65,6 +67,21 @@ def process_file(file_path: Path, done_dir: Path, images_dir: Path, dry_run: boo
         file_path.replace(done_dir / file_path.name)
 
 
+@app.command()
+def upload_images(
+    images_dir: Path = typer.Option(..., help="Path to images directory"),
+):
+    images = [i for i in images_dir.iterdir() if i.is_file()]
+    upload_tokens = [upload_to_google_photos(i) for i in images]
+    mint(upload_tokens)
+
+    done_dir = images_dir / "Done"
+    done_dir.mkdir(exist_ok=True)
+    for image in images:
+        image.replace(done_dir / image.name)
+
+
+@app.command()
 def main(
     queue_dir: Path = typer.Option(..., help="Path to queue directory"),
     images_dir: Path = typer.Option(..., help="Path to images directory"),
@@ -80,15 +97,9 @@ def main(
         process_file(file_path, done_dir, images_dir, dry_run)
 
     if not dry_run:
-        images = [i for i in images_dir.iterdir() if i.is_file()]
-        upload_tokens = [upload_to_google_photos(i) for i in images]
-        mint(upload_tokens)
-
-        done_dir = images_dir / "Done"
-        done_dir.mkdir(exist_ok=True)
-        for image in images:
-            image.replace(done_dir / image.name)
+        upload_images(images_dir)
 
 
 if __name__ == "__main__":
+    app()
     typer.run(main)
