@@ -9,3 +9,4 @@ worker/__pycache__
 /client.json
 /token_photos.pickle
 /images/
+*.pyc
