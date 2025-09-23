@@ -28,7 +28,7 @@ def write_image_file(
 ) -> None:
     """Write image data to file with timestamp in EXIF metadata."""
 
-    current_time = pendulum.parse(taken_at)
+    current_time = pendulum.parse(taken_at).in_tz(tz)
 
     timestamp = current_time.format("YYYY:MM:DD HH:mm:ss")
     offset = current_time.format("ZZ")
@@ -37,9 +37,7 @@ def write_image_file(
         {
             "Exif": {
                 piexif.ExifIFD.DateTimeOriginal: timestamp,
-                piexif.ExifIFD.DateTimeDigitized: timestamp,
                 piexif.ExifIFD.OffsetTimeOriginal: offset,
-                piexif.ExifIFD.OffsetTimeDigitized: offset,
             }
         }
     )
