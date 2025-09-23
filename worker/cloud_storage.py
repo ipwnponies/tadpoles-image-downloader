@@ -70,6 +70,10 @@ def upload_to_google_photos(image_path: Path) -> str:
 
 
 def mint(upload_tokens: Iterable[str]) -> None:
+    if not upload_tokens:
+        logging.info("No upload tokens provided, skipping minting")
+        return
+
     # Create media item and attach to album
     create_item = {
         "newMediaItems": [
