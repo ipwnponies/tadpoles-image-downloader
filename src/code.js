@@ -24,23 +24,32 @@ function processEmails(dryRun = true) {
 
   const query = `label:${labelName} newer_than:1d`;
   const urls = GmailApp.search(query).flatMap((thread) =>
-    thread
-      .getMessages()
-      .map((msg) => {
-        const body = msg.getBody();
-        const urlMatch = body.match(
-          /href="(https:\/\/www\.tadpoles\.com\/m\/p\/[^"]+)"/,
-        );
-        if (!urlMatch) return null;
-        return {
-          url: urlMatch[1],
-          msgId: msg.getId(),
-          timestamp: msg.getDate(),
-        };
-      })
-      .filter(Boolean),
+    thread.getMessages().flatMap((msg) => {
+      const body = msg.getBody();
+      const urlMatches = [
+        ...body.matchAll(/href="(https:\/\/www\.tadpoles\.com\/m\/p\/[^"]+)"/g),
+      ];
+      return urlMatches.map((m) => ({
+        url: m[1],
+        msgId: msg.getId(),
+        timestamp: msg.getDate(),
+      }));
+    }),
   );
-  enqueue(urls, dryRun);
+
+  // Deduplicate URLs, keeping the earliest timestamp
+  const uniqueUrls = Array.from(
+    urls
+      .reduce((map, item) => {
+        const existing = map.get(item.url);
+        if (!existing || item.timestamp < existing.timestamp) {
+          map.set(item.url, item);
+        }
+        return map;
+      }, new Map())
+      .values(),
+  );
+  enqueue(uniqueUrls, dryRun);
 }
 
 function enqueue(urls, dryRun = true) {
