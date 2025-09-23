@@ -10,14 +10,6 @@
 
 const config = PropertiesService.getScriptProperties().getProperties();
 
-function formatDateWithOffset(date) {
-  return Utilities.formatDate(
-    date,
-    Session.getScriptTimeZone(),
-    "yyyy-MM-dd'T'HH:mm:ssXXX",
-  );
-}
-
 function forRealsies() {
   processEmails(false);
 }
@@ -43,7 +35,7 @@ function processEmails(dryRun = true) {
         return {
           url: urlMatch[1],
           msgId: msg.getId(),
-          timestamp: formatDateWithOffset(msg.getDate()),
+          timestamp: msg.getDate(),
         };
       })
       .filter(Boolean),
