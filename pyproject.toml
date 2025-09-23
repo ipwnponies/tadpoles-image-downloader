@@ -5,7 +5,6 @@ description = ""
 authors = [
     {name = "John Nguyen",email = "ipwnponies@gmail.com"}
 ]
-readme = "README.md"
 requires-python = ">=3.12,<4.0"
 dependencies = [
     "requests (>=2.32.5,<3.0.0)",
@@ -18,8 +17,6 @@ dependencies = [
     "filetype (>=1.2.0,<2.0.0)",
     "pendulum (>=3.1.0,<4.0.0)"
 ]
-[tool.poetry]
-package-mode = false
 
 [tool.ruff]
 select = ["I"]
@@ -36,4 +33,4 @@ ruff = "^0.13.0"
 typer = "^0.17.4"
 
 [tool.poetry.scripts]
-main = "worker.process_queue:app"
+main = "tadpoles_image_downloader.process_queue:app"

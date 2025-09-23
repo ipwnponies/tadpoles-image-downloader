@@ -13,7 +13,7 @@ import requests
 import typer
 from PIL import Image
 
-from worker.cloud_storage import mint, upload_to_google_photos
+from tadpoles_image_downloader.cloud_storage import mint, upload_to_google_photos
 
 app = typer.Typer()
 
