@@ -14,6 +14,10 @@ function forRealsies() {
   processEmails(false);
 }
 
+const extractCaption = (body) => {
+  return body.includes("Sent via Tadpoles") ? null : body;
+};
+
 function processEmails(dryRun = true) {
   var labelName = config.label_name;
 
@@ -33,6 +37,7 @@ function processEmails(dryRun = true) {
         url: m[1],
         msgId: msg.getId(),
         timestamp: msg.getDate(),
+        caption: extractCaption(msg.getPlainBody()),
       }));
     }),
   );

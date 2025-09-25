@@ -69,7 +69,7 @@ def upload_to_google_photos(image_path: Path) -> str:
     return upload_token
 
 
-def mint(upload_tokens: Iterable[str]) -> None:
+def mint(upload_tokens: Iterable[dict[str, str]]) -> None:
     if not upload_tokens:
         logging.info("No upload tokens provided, skipping minting")
         return
@@ -78,8 +78,8 @@ def mint(upload_tokens: Iterable[str]) -> None:
     create_item = {
         "newMediaItems": [
             {
-                "description": "Uploaded via script",
-                "simpleMediaItem": {"uploadToken": i},
+                "description": i["caption"] or "Uploaded via script",
+                "simpleMediaItem": {"uploadToken": i["token"]},
             }
             for i in upload_tokens
         ],

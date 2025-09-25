@@ -53,7 +53,7 @@ def write_image_file(
     img.save(file, exif=exif)
 
 
-def process_file(file_path: Path, done_dir: Path, images_dir: Path, dry_run: bool):
+def process_file(file_path: Path, done_dir: Path, images_dir: Path, dry_run: bool) -> dict[str, str]:
     with open(file_path) as f:
         data = json.load(f)
 
@@ -65,6 +65,7 @@ def process_file(file_path: Path, done_dir: Path, images_dir: Path, dry_run: boo
         redirected_url = resp.url
 
         filename = Path(urlparse(redirected_url).path).name
+        url["filename"] = filename
 
         if not dry_run:
             write_image_file(
@@ -77,14 +78,23 @@ def process_file(file_path: Path, done_dir: Path, images_dir: Path, dry_run: boo
     # Move processed JSON to Done
     if not dry_run:
         file_path.replace(done_dir / file_path.name)
+    return {i["filename"]: i["caption"] or "" for i in data}
 
 
 @app.command()
-def upload_images(
-    images_dir: Path = typer.Option(..., help="Path to images directory"),
-):
+def upload_images(images_dir: Path = typer.Option(..., help="Path to images directory")):
+    _upload_images(images_dir, {})
+
+
+def _upload_images(images_dir: Path, file_captions: dict[str, str]):
     images = [i for i in images_dir.iterdir() if i.is_file()]
-    upload_tokens = [upload_to_google_photos(i) for i in images]
+    upload_tokens = [
+        {
+            "token": upload_to_google_photos(i),
+            "caption": file_captions[i.stem],
+        }
+        for i in images
+    ]
     mint(upload_tokens)
 
     done_dir = images_dir / "Done"
@@ -105,11 +115,14 @@ def main(
     done_dir.mkdir(exist_ok=True)
     images_dir.mkdir(exist_ok=True)
 
+    file_metadatas = {}
+
     for file_path in queue_dir.glob("*.json"):
-        process_file(file_path, done_dir, images_dir, dry_run)
+        file_metadata = process_file(file_path, done_dir, images_dir, dry_run)
+        file_metadatas.update(file_metadata)
 
     if not dry_run:
-        upload_images(images_dir)
+        _upload_images(images_dir, file_metadatas)
 
 
 if __name__ == "__main__":
