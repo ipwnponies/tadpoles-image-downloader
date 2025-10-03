@@ -13,6 +13,7 @@ import pendulum
 import piexif
 import typer
 from aiohttp import ClientSession, TCPConnector
+from filetype.types import IMAGE
 from PIL import Image
 
 from tadpoles_image_downloader.cloud_storage import (
@@ -48,12 +49,11 @@ def write_image_file(
         }
     )
 
-    if kind := filetype.guess(data):
-        ext = kind.extension
-    else:
-        logging.warning("Unknown format, assuming png")
-        ext = "png"
-    file = file.with_suffix(f".{ext}")
+    kind = filetype.guess(data)
+    if kind not in IMAGE:
+        logging.warning("Unknown or non-image format, skipping")
+        return
+    file = file.with_suffix(f".{kind.extension}")
 
     img = Image.open(BytesIO(data))
     img.save(file, exif=exif)
