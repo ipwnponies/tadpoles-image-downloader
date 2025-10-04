@@ -81,7 +81,7 @@ async def mint(session: aiohttp.ClientSession, upload_tokens: Iterable[tuple[str
     create_item = {
         "newMediaItems": [
             {
-                "description": caption or "Uploaded via script",
+                **({"description": caption} if caption else {}),
                 "simpleMediaItem": {"uploadToken": token},
             }
             for token, caption in upload_tokens
