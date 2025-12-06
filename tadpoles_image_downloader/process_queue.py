@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
@@ -25,6 +26,14 @@ from tadpoles_image_downloader.cloud_storage import (
 app = typer.Typer()
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s")
+
+
+@dataclass
+class FetchedEntry:
+    filename: str
+    caption: str
+    timestamp: str
+    payload: bytes | None
 
 
 def write_image_file(
@@ -62,26 +71,21 @@ def write_image_file(
 async def _fetch_entry(
     session: ClientSession,
     entry: dict[str, str],
-    images_dir: Path,
     dry_run: bool,
-) -> tuple[str, str]:
+) -> FetchedEntry:
     async with session.get(entry["url"], params={"d": "t"}) as resp:
         resp.raise_for_status()
         payload = await resp.read()
         redirected_url = str(resp.url)
 
     filename = Path(urlparse(redirected_url).path).name
-    entry["filename"] = filename
-
-    if not dry_run:
-        await asyncio.to_thread(
-            write_image_file,
-            payload,
-            images_dir / filename,
-            entry["timestamp"],
-        )
     logging.info("Downloaded: %s", filename)
-    return filename, entry.get("caption", "")
+    return FetchedEntry(
+        filename=filename,
+        caption=entry.get("caption", ""),
+        timestamp=entry["timestamp"],
+        payload=payload if not dry_run else None,
+    )
 
 
 async def process_file(
@@ -96,10 +100,45 @@ async def process_file(
     file_metadata: dict[str, str] = {}
 
     async with ClientSession(connector=TCPConnector()) as session:
-        tasks = [asyncio.create_task(_fetch_entry(session, entry, images_dir, dry_run)) for entry in data]
-        results = await asyncio.gather(*tasks)
-        for filename, caption in results:
-            file_metadata[filename] = caption
+        tasks = [asyncio.create_task(_fetch_entry(session, entry, dry_run)) for entry in data]
+        fetched_entries = await asyncio.gather(*tasks)
+
+    deduped: dict[str, tuple[pendulum.DateTime, FetchedEntry]] = {}
+    for fetched in fetched_entries:
+        entry_timestamp = pendulum.parse(fetched.timestamp)
+        existing = deduped.get(fetched.filename)
+        if existing:
+            existing_timestamp, existing_entry = existing
+            if entry_timestamp >= existing_timestamp:
+                logging.info(
+                    "Skipping duplicate download for %s at %s (keeping %s)",
+                    fetched.filename,
+                    fetched.timestamp,
+                    existing_entry.timestamp,
+                )
+                continue
+            logging.info(
+                "Replacing duplicate %s with earlier timestamp %s (was %s)",
+                fetched.filename,
+                fetched.timestamp,
+                existing_entry.timestamp,
+            )
+        deduped[fetched.filename] = (entry_timestamp, fetched)
+
+    if not dry_run:
+        write_tasks = [
+            asyncio.to_thread(
+                write_image_file,
+                entry.payload,
+                images_dir / filename,
+                entry.timestamp,
+            )
+            for filename, (_, entry) in deduped.items()
+        ]
+        await asyncio.gather(*write_tasks)
+
+    for filename, (_, entry) in deduped.items():
+        file_metadata[filename] = entry.caption
 
     if not dry_run:
         target = done_dir / file_path.name
