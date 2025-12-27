@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
+import subprocess
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -16,6 +16,7 @@ import typer
 from aiohttp import ClientSession, TCPConnector
 from filetype.types import IMAGE
 from PIL import Image
+from platformdirs import PlatformDirs
 
 from tadpoles_image_downloader.cloud_storage import (
     google_photos_session,
@@ -26,6 +27,12 @@ from tadpoles_image_downloader.cloud_storage import (
 app = typer.Typer()
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s")
+
+
+HEALTHCHECK_AGE_FILE = Path(__file__).parents[1] / "secrets" / "healthcheck-url.age"
+AGE_IDENTITY = Path(PlatformDirs().user_config_path) / "age" / "tadpoles-image-downloader.agekey"
+if not (AGE_IDENTITY.exists() and HEALTHCHECK_AGE_FILE.exists()):
+    raise RuntimeError(f"Not all required age files are present: {AGE_IDENTITY}, {HEALTHCHECK_AGE_FILE}")
 
 
 @dataclass
@@ -172,6 +179,28 @@ async def _upload_images(images_dir: Path, file_captions: dict[str, str]):
     await asyncio.gather(*[asyncio.to_thread(image.replace, done_dir / image.name) for image in images])
 
 
+def _load_healthcheck_url() -> str:
+    proc = subprocess.run(
+        ["age", "--decrypt", "-i", str(AGE_IDENTITY), str(HEALTHCHECK_AGE_FILE)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    if not (url := proc.stdout.strip()):
+        raise RuntimeError("Decrypted health check URL is empty")
+
+    return url
+
+
+async def _ping_healthcheck() -> None:
+    async with ClientSession() as session:
+        url = _load_healthcheck_url()
+        async with session.get(url) as resp:
+            resp.raise_for_status()
+    logging.info("Health check ping succeeded")
+
+
 @app.command()
 def main(
     queue_dir: Path = typer.Option(..., help="Path to queue directory"),
@@ -195,6 +224,7 @@ async def _main(queue_dir: Path, images_dir: Path, dry_run: bool) -> None:
 
     if not dry_run:
         await _upload_images(images_dir, file_metadatas)
+        await _ping_healthcheck()
 
 
 if __name__ == "__main__":
