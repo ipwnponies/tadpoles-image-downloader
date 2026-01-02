@@ -1,6 +1,8 @@
 from __future__ import annotations
+import yaml
 
 import asyncio
+import functools
 import json
 import logging
 import subprocess
@@ -29,10 +31,21 @@ app = typer.Typer()
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s")
 
 
-HEALTHCHECK_AGE_FILE = Path(__file__).parents[1] / "secrets" / "healthcheck-url.age"
-AGE_IDENTITY = Path(PlatformDirs().user_config_path) / "age" / "tadpoles-image-downloader.agekey"
-if not (AGE_IDENTITY.exists() and HEALTHCHECK_AGE_FILE.exists()):
-    raise RuntimeError(f"Not all required age files are present: {AGE_IDENTITY}, {HEALTHCHECK_AGE_FILE}")
+@functools.cache
+def secrets() -> dict:
+    SECRETS_FILE = Path(__file__).parents[1] / "secrets.yaml"
+    AGE_IDENTITY = Path(PlatformDirs().user_config_path) / "age" / "tadpoles-image-downloader.agekey"
+    if not (AGE_IDENTITY.exists() and SECRETS_FILE.exists()):
+        raise RuntimeError(f"Not all required age files are present: {AGE_IDENTITY}, {SECRETS_FILE}")
+
+    p = subprocess.run(
+        ["sops", "decrypt", SECRETS_FILE],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={"SOPS_AGE_KEY_FILE": str(AGE_IDENTITY)},
+    )
+    return yaml.safe_load(p.stdout)
 
 
 @dataclass
@@ -179,23 +192,9 @@ async def _upload_images(images_dir: Path, file_captions: dict[str, str]):
     await asyncio.gather(*[asyncio.to_thread(image.replace, done_dir / image.name) for image in images])
 
 
-def _load_healthcheck_url() -> str:
-    proc = subprocess.run(
-        ["age", "--decrypt", "-i", str(AGE_IDENTITY), str(HEALTHCHECK_AGE_FILE)],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-
-    if not (url := proc.stdout.strip()):
-        raise RuntimeError("Decrypted health check URL is empty")
-
-    return url
-
-
 async def _ping_healthcheck() -> None:
     async with ClientSession() as session:
-        url = _load_healthcheck_url()
+        url = secrets()["healthcheck_url"]
         async with session.get(url) as resp:
             resp.raise_for_status()
     logging.info("Health check ping succeeded")
@@ -224,8 +223,9 @@ async def _main(queue_dir: Path, images_dir: Path, dry_run: bool) -> None:
 
     if not dry_run:
         await _upload_images(images_dir, file_metadatas)
-        await _ping_healthcheck()
+    await _ping_healthcheck()
 
 
 if __name__ == "__main__":
+    secrets()  # Load secrets to ensure they are available
     app()
