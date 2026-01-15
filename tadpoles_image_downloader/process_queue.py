@@ -228,5 +228,4 @@ async def _main(queue_dir: Path, images_dir: Path, dry_run: bool) -> None:
 
 
 if __name__ == "__main__":
-    secrets()  # Load secrets to ensure they are available
     app()
