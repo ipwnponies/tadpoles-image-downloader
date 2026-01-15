@@ -5,6 +5,7 @@ import asyncio
 import functools
 import json
 import logging
+import os
 import subprocess
 from dataclasses import dataclass
 from io import BytesIO
@@ -43,7 +44,7 @@ def secrets() -> dict:
         check=True,
         capture_output=True,
         text=True,
-        env={"SOPS_AGE_KEY_FILE": str(AGE_IDENTITY)},
+        env={**os.environ, "SOPS_AGE_KEY_FILE": str(AGE_IDENTITY)},
     )
     return yaml.safe_load(p.stdout)
 
