@@ -1,5 +1,4 @@
 from __future__ import annotations
-import yaml
 
 import asyncio
 import functools
@@ -7,15 +6,18 @@ import json
 import logging
 import os
 import subprocess
+from collections.abc import Awaitable, Iterable
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
+from typing import TypeVar
 from urllib.parse import urlparse
 
 import filetype
 import pendulum
 import piexif
 import typer
+import yaml
 from aiohttp import ClientSession, TCPConnector
 from filetype.types import IMAGE
 from PIL import Image
@@ -30,6 +32,12 @@ from tadpoles_image_downloader.cloud_storage import (
 app = typer.Typer()
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s")
+
+T = TypeVar("T")
+
+DEFAULT_FETCH_CONCURRENCY = 15
+DEFAULT_PROCESS_CONCURRENCY = 6
+DEFAULT_UPLOAD_CONCURRENCY = 3
 
 
 @functools.cache
@@ -55,6 +63,22 @@ class FetchedEntry:
     caption: str
     timestamp: str
     payload: bytes | None
+
+
+def _validate_concurrency(name: str, value: int) -> int:
+    if value < 1:
+        raise typer.BadParameter(f"{name} must be greater than or equal to 1")
+    return value
+
+
+async def gather_with_concurrency(limit: int, awaitables: Iterable[Awaitable[T]]) -> list[T]:
+    semaphore = asyncio.Semaphore(limit)
+
+    async def run(awaitable: Awaitable[T]) -> T:
+        async with semaphore:
+            return await awaitable
+
+    return await asyncio.gather(*(run(awaitable) for awaitable in awaitables))
 
 
 def write_image_file(
@@ -114,15 +138,19 @@ async def process_file(
     done_dir: Path,
     images_dir: Path,
     dry_run: bool,
+    fetch_concurrency: int,
+    write_concurrency: int,
 ) -> dict[str, str]:
     with file_path.open() as handle:
         data = json.load(handle)
 
     file_metadata: dict[str, str] = {}
 
-    async with ClientSession(connector=TCPConnector()) as session:
-        tasks = [asyncio.create_task(_fetch_entry(session, entry, dry_run)) for entry in data]
-        fetched_entries = await asyncio.gather(*tasks)
+    async with ClientSession(connector=TCPConnector(limit=fetch_concurrency)) as session:
+        fetched_entries = await gather_with_concurrency(
+            fetch_concurrency,
+            (_fetch_entry(session, entry, dry_run) for entry in data),
+        )
 
     deduped: dict[str, tuple[pendulum.DateTime, FetchedEntry]] = {}
     for fetched in fetched_entries:
@@ -147,16 +175,18 @@ async def process_file(
         deduped[fetched.filename] = (entry_timestamp, fetched)
 
     if not dry_run:
-        write_tasks = [
-            asyncio.to_thread(
-                write_image_file,
-                entry.payload,
-                images_dir / filename,
-                entry.timestamp,
-            )
-            for filename, (_, entry) in deduped.items()
-        ]
-        await asyncio.gather(*write_tasks)
+        await gather_with_concurrency(
+            write_concurrency,
+            (
+                asyncio.to_thread(
+                    write_image_file,
+                    entry.payload,
+                    images_dir / filename,
+                    entry.timestamp,
+                )
+                for filename, (_, entry) in deduped.items()
+            ),
+        )
 
     for filename, (_, entry) in deduped.items():
         file_metadata[filename] = entry.caption
@@ -168,11 +198,18 @@ async def process_file(
 
 
 @app.command()
-def upload_images(images_dir: Path = typer.Option(..., help="Path to images directory")):
-    asyncio.run(_upload_images(images_dir, {}))
+def upload_images(
+    images_dir: Path = typer.Option(..., help="Path to images directory"),
+    upload_concurrency: int = typer.Option(
+        DEFAULT_UPLOAD_CONCURRENCY,
+        help="Maximum number of concurrent uploads",
+    ),
+):
+    upload_concurrency = _validate_concurrency("upload-concurrency", upload_concurrency)
+    asyncio.run(_upload_images(images_dir, {}, upload_concurrency))
 
 
-async def _upload_images(images_dir: Path, file_captions: dict[str, str]):
+async def _upload_images(images_dir: Path, file_captions: dict[str, str], upload_concurrency: int):
     images_dir.mkdir(exist_ok=True)
     images = [i for i in images_dir.iterdir() if i.is_file()]
     if not images:
@@ -180,17 +217,18 @@ async def _upload_images(images_dir: Path, file_captions: dict[str, str]):
         return
 
     async with google_photos_session() as session:
-        upload_tokens = await asyncio.gather(
-            *[
-                asyncio.create_task(upload_to_google_photos(session, image, file_captions[image.stem]))
-                for image in images
-            ]
+        upload_tokens = await gather_with_concurrency(
+            upload_concurrency,
+            (upload_to_google_photos(session, image, file_captions[image.stem]) for image in images),
         )
         await mint(session, upload_tokens)
 
     done_dir = images_dir / "Done"
     done_dir.mkdir(exist_ok=True)
-    await asyncio.gather(*[asyncio.to_thread(image.replace, done_dir / image.name) for image in images])
+    await gather_with_concurrency(
+        upload_concurrency,
+        (asyncio.to_thread(image.replace, done_dir / image.name) for image in images),
+    )
 
 
 async def _ping_healthcheck() -> None:
@@ -206,24 +244,58 @@ def main(
     queue_dir: Path = typer.Option(..., help="Path to queue directory"),
     images_dir: Path = typer.Option(..., help="Path to images directory"),
     dry_run: bool = typer.Option(True, help="Print actions without making changes"),
+    fetch_concurrency: int = typer.Option(
+        DEFAULT_FETCH_CONCURRENCY,
+        help="Maximum number of concurrent downloads per queue file",
+    ),
+    process_concurrency: int = typer.Option(
+        DEFAULT_PROCESS_CONCURRENCY,
+        help="Maximum number of queue files and image writes processed concurrently",
+    ),
+    upload_concurrency: int = typer.Option(
+        DEFAULT_UPLOAD_CONCURRENCY,
+        help="Maximum number of concurrent uploads",
+    ),
 ):
-    asyncio.run(_main(queue_dir, images_dir, dry_run))
+    fetch_concurrency = _validate_concurrency("fetch-concurrency", fetch_concurrency)
+    process_concurrency = _validate_concurrency("process-concurrency", process_concurrency)
+    upload_concurrency = _validate_concurrency("upload-concurrency", upload_concurrency)
+    asyncio.run(_main(queue_dir, images_dir, dry_run, fetch_concurrency, process_concurrency, upload_concurrency))
 
 
-async def _main(queue_dir: Path, images_dir: Path, dry_run: bool) -> None:
+async def _main(
+    queue_dir: Path,
+    images_dir: Path,
+    dry_run: bool,
+    fetch_concurrency: int,
+    process_concurrency: int,
+    upload_concurrency: int,
+) -> None:
     done_dir = queue_dir / "Done"
     done_dir.mkdir(exist_ok=True)
     images_dir.mkdir(exist_ok=True)
 
-    tasks = [asyncio.create_task(process_file(i, done_dir, images_dir, dry_run)) for i in queue_dir.glob("*.json")]
-    results = await asyncio.gather(*tasks)  # results is a list of dicts
+    results = await gather_with_concurrency(
+        process_concurrency,
+        (
+            process_file(
+                queue_file,
+                done_dir,
+                images_dir,
+                dry_run,
+                fetch_concurrency,
+                process_concurrency,
+            )
+            for queue_file in queue_dir.glob("*.json")
+        ),
+    )
 
     file_metadatas: dict[str, str] = {}
     for result in results:
         file_metadatas.update(result)
 
     if not dry_run:
-        await _upload_images(images_dir, file_metadatas)
+        await _upload_images(images_dir, file_metadatas, upload_concurrency)
     await _ping_healthcheck()
 
 
