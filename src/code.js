@@ -15,7 +15,15 @@ function forRealsies() {
 }
 
 const extractCaption = (body) => {
-  return body.includes("Sent via Tadpoles") ? null : body;
+  if (!body) {
+    return null;
+  }
+  const lowerBody = body.toLowerCase();
+  const signature = "sent via tadpoles";
+  if (lowerBody.includes(signature)) {
+    return null;
+  }
+  return body.trim();
 };
 
 function processEmails(dryRun = true) {
@@ -30,14 +38,16 @@ function processEmails(dryRun = true) {
   const urls = GmailApp.search(query).flatMap((thread) =>
     thread.getMessages().flatMap((msg) => {
       const body = msg.getBody();
+      const plainBody = msg.getPlainBody();
+      const caption = extractCaption(plainBody);
       const urlMatches = [
         ...body.matchAll(/href="(https:\/\/www\.tadpoles\.com\/m\/p\/[^"]+)"/g),
       ];
       return urlMatches.map((m) => ({
         url: m[1],
         msgId: msg.getId(),
-        timestamp: msg.getDate(),
-        caption: extractCaption(msg.getPlainBody()),
+        timestamp: msg.getDate().toISOString(),
+        caption: caption,
       }));
     }),
   );
@@ -47,7 +57,7 @@ function processEmails(dryRun = true) {
     urls
       .reduce((map, item) => {
         const existing = map.get(item.url);
-        if (!existing || item.timestamp < existing.timestamp) {
+        if (!existing || new Date(item.timestamp) < new Date(existing.timestamp)) {
           map.set(item.url, item);
         }
         return map;
