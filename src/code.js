@@ -78,22 +78,31 @@ function processEmails(dryRun = true) {
     "GmailApp.search"
   );
 
-  const urls = threads.flatMap((thread) =>
-    thread.getMessages().flatMap((msg) => {
-      const body = msg.getBody();
-      const plainBody = msg.getPlainBody();
-      const caption = extractCaption(plainBody);
-      const urlMatches = [
-        ...body.matchAll(/href="(https:\/\/www\.tadpoles\.com\/m\/p\/[^"]+)"/g),
-      ];
-      return urlMatches.map((m) => ({
-        url: m[1],
-        msgId: msg.getId(),
-        timestamp: msg.getDate().toISOString(),
-        caption: caption,
-      }));
-    }),
-  );
+  const urls = threads.flatMap((thread) => {
+    try {
+      return thread.getMessages().flatMap((msg) => {
+        try {
+          const htmlBody = msg.getBody();
+          const plainBody = msg.getPlainBody();
+          const caption = extractCaption(plainBody);
+          const urlMatches = htmlBody.matchAll(/href="(https:\/\/www\.tadpoles\.com\/m\/p\/[^"]+)"/g);
+
+          return [...urlMatches].map((match) => ({
+            url: match[1],
+            msgId: msg.getId(),
+            timestamp: msg.getDate().toISOString(),
+            caption: caption,
+          }));
+        } catch (msgError) {
+          Logger.log(`Error processing message ${msg.getId()}: ${msgError.message}`);
+          return [];
+        }
+      });
+    } catch (threadError) {
+      Logger.log(`Error processing thread: ${threadError.message}`);
+      return [];
+    }
+  });
 
   // Deduplicate URLs, keeping the earliest timestamp
   const uniqueUrls = Array.from(
@@ -111,7 +120,7 @@ function processEmails(dryRun = true) {
 }
 
 function enqueue(urls, dryRun = true) {
-  const filename = `${new Date().toLocaleDateString("en-CA")}.json`;
+  const filename = `${new Date().toISOString().split("T")[0]}.json`;
   const folder = safeApiCall(
     () => DriveApp.getFolderById(config.drive_folder_id),
     "getFolderById"
@@ -120,8 +129,29 @@ function enqueue(urls, dryRun = true) {
   if (dryRun) {
     const fullPath = folder.getName() + "/" + filename;
     Logger.log("Dry run: would save task to " + fullPath);
-    Logger.log(JSON.stringify(urls, null, 2));
+    Logger.log(`Dry run: ${urls.length} URL(s) found`);
   } else {
-    folder.createFile(filename, JSON.stringify(urls), MimeType.PLAIN_TEXT);
+    let existingData = [];
+    try {
+      const existingFiles = folder.getFilesByName(filename);
+      if (existingFiles.hasNext()) {
+        const existingFile = existingFiles.next();
+        const existingContent = existingFile.getBlob().getDataAsString();
+        existingData = JSON.parse(existingContent);
+        const existingUrls = new Set(urls.map((u) => u.url));
+        existingData = existingData.filter((item) => !existingUrls.has(item.url));
+      }
+    } catch (e) {
+      Logger.log("No existing file to merge, starting fresh");
+    }
+
+    const mergedData = [...existingData, ...urls];
+    const existingFiles = folder.getFilesByName(filename);
+    if (existingFiles.hasNext()) {
+      const existingFile = existingFiles.next();
+      existingFile.setContent(JSON.stringify(mergedData));
+    } else {
+      folder.createFile(filename, JSON.stringify(mergedData), MimeType.JSON);
+    }
   }
 }
