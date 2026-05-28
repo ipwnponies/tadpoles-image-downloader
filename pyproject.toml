@@ -1,7 +1,7 @@
 [project]
 name = "tadpoles-image-downloader"
 version = "0.1.0"
-description = ""
+description = "Download images from Tadpoles childcare emails and upload them to Google Photos"
 authors = [
     {name = "John Nguyen",email = "ipwnponies@gmail.com"}
 ]
