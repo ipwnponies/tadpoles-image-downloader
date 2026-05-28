@@ -42,6 +42,7 @@ DEFAULT_UPLOAD_CONCURRENCY = 3
 
 @functools.cache
 def secrets() -> dict[str, Any]:
+    """Decrypt and return the SOPS-encrypted secrets.yaml using the age identity key."""
     SECRETS_FILE = Path(__file__).parents[1] / "secrets.yaml"
     AGE_IDENTITY = Path(PlatformDirs().user_config_path) / "age" / "tadpoles-image-downloader.agekey"
     if not (AGE_IDENTITY.exists() and SECRETS_FILE.exists()):
@@ -72,6 +73,7 @@ def _validate_concurrency(name: str, value: int) -> int:
 
 
 async def gather_with_concurrency(limit: int, awaitables: Iterable[Awaitable[T]]) -> list[T]:
+    """Run awaitables concurrently with at most `limit` running at once."""
     semaphore = asyncio.Semaphore(limit)
 
     async def run(awaitable: Awaitable[T]) -> T:
@@ -118,6 +120,7 @@ async def _fetch_entry(
     entry: dict[str, str],
     dry_run: bool,
 ) -> FetchedEntry:
+    """Download a single image entry from Tadpoles and return a FetchedEntry."""
     async with session.get(entry["url"], params={"d": "t"}) as resp:
         resp.raise_for_status()
         payload = await resp.read()
@@ -141,6 +144,7 @@ async def process_file(
     fetch_concurrency: int,
     write_concurrency: int,
 ) -> dict[str, str]:
+    """Process a single queue file: fetch images, deduplicate, write to disk, move to Done."""
     try:
         with file_path.open() as handle:
             data = json.load(handle)
@@ -212,6 +216,7 @@ def upload_images(
 
 
 async def _upload_images(images_dir: Path, file_captions: dict[str, str], upload_concurrency: int) -> None:
+    """Upload all images in images_dir to Google Photos, then move them to a Done/ subdirectory."""
     images_dir.mkdir(exist_ok=True)
     images = [i for i in images_dir.iterdir() if i.is_file()]
     if not images:
@@ -234,6 +239,7 @@ async def _upload_images(images_dir: Path, file_captions: dict[str, str], upload
 
 
 async def _ping_healthcheck() -> None:
+    """Ping the healthcheck URL from secrets to signal a successful run."""
     async with ClientSession() as session:
         url = secrets()["healthcheck_url"]
         async with session.get(url) as resp:
@@ -273,6 +279,7 @@ async def _main(
     process_concurrency: int,
     upload_concurrency: int,
 ) -> None:
+    """Orchestrate the full pipeline: process queue files, upload images, ping healthcheck."""
     done_dir = queue_dir / "Done"
     done_dir.mkdir(exist_ok=True)
     images_dir.mkdir(exist_ok=True)
