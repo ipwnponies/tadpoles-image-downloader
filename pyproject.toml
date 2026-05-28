@@ -18,8 +18,22 @@ dependencies = [
 ]
 
 [tool.ruff]
-select = ["I"]
 line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "B008",   # typer.Option() in function defaults is idiomatic Typer
+    "UP047",  # PEP 695 type parameter syntax not yet supported by mypy
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+disable_error_code = ["import-untyped"]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
@@ -30,6 +44,8 @@ pudb = "^2025.1"
 ipython = "^9.5.0"
 ruff = "^0.13.0"
 typer = "^0.17.4"
+mypy = "^1.0"
+pre-commit = "^4.0"
 
 [tool.poetry.scripts]
 main = "tadpoles_image_downloader.process_queue:app"
