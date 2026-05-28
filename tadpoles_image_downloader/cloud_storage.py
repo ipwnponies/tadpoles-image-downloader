@@ -1,32 +1,49 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-import pickle
 import typing
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
 import aiohttp
 from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
 if typing.TYPE_CHECKING:
-    from typing import Iterable
+    from collections.abc import AsyncIterator, Sequence
 
 SCOPES = [
     "https://www.googleapis.com/auth/photoslibrary.appendonly",
 ]
 
 CREDENTIALS_FILE = Path("client.json")
-TOKEN_FILE = Path("token_photos.pickle")
+TOKEN_FILE = Path("token_photos.json")
 
 
-def _load_credentials():
+def _load_credentials(
+    credentials_file: Path = CREDENTIALS_FILE,
+    token_file: Path = TOKEN_FILE,
+) -> Credentials:
     creds = None
-    if TOKEN_FILE.exists():
-        with TOKEN_FILE.open("rb") as token:
-            creds = pickle.load(token)
+
+    if token_file.exists():
+        data = json.loads(token_file.read_text())
+        # expiry is stored as a naive UTC ISO string; google-auth's internal
+        # comparison (Credentials.expired) always uses naive UTC datetimes.
+        expiry = datetime.fromisoformat(data["expiry"]) if data.get("expiry") else None
+        creds = Credentials(
+            token=data.get("token"),
+            refresh_token=data.get("refresh_token"),
+            token_uri=data.get("token_uri"),
+            client_id=data.get("client_id"),
+            client_secret=data.get("client_secret"),
+            scopes=data.get("scopes"),
+            expiry=expiry,
+        )
 
     if creds and creds.valid:
         return creds
@@ -36,17 +53,32 @@ def _load_credentials():
         creds.refresh(Request())
     else:
         logging.warning("Credentials are missing or invalid. Fetching new token")
-        flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_FILE), SCOPES)
+        flow = InstalledAppFlow.from_client_secrets_file(str(credentials_file), SCOPES)
         creds = flow.run_local_server(port=0)
 
-    with TOKEN_FILE.open("wb") as token:
-        pickle.dump(creds, token)
+    # Store expiry as naive UTC — google-auth provides and expects naive UTC datetimes.
+    token_file.write_text(
+        json.dumps(
+            {
+                "token": creds.token,
+                "refresh_token": creds.refresh_token,
+                "token_uri": creds.token_uri,
+                "client_id": creds.client_id,
+                "client_secret": creds.client_secret,
+                "scopes": list(creds.scopes or []),
+                "expiry": creds.expiry.isoformat() if creds.expiry else None,
+            }
+        )
+    )
     return creds
 
 
 @asynccontextmanager
-async def google_photos_session():
-    creds = await asyncio.to_thread(_load_credentials)
+async def google_photos_session(
+    credentials_file: Path = CREDENTIALS_FILE,
+    token_file: Path = TOKEN_FILE,
+) -> AsyncIterator[aiohttp.ClientSession]:
+    creds = await asyncio.to_thread(_load_credentials, credentials_file, token_file)
     headers = {"Authorization": f"Bearer {creds.token}"}
     async with aiohttp.ClientSession(headers=headers) as session:
         yield session
@@ -73,7 +105,7 @@ async def upload_to_google_photos(session: aiohttp.ClientSession, image_path: Pa
     return upload_token, caption
 
 
-async def mint(session: aiohttp.ClientSession, upload_tokens: Iterable[tuple[str, str]]) -> None:
+async def mint(session: aiohttp.ClientSession, upload_tokens: Sequence[tuple[str, str]]) -> None:
     if not upload_tokens:
         logging.info("No upload tokens provided, skipping minting")
         return
