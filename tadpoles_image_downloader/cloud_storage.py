@@ -86,7 +86,7 @@ async def google_photos_session(
 
 
 async def upload_to_google_photos(session: aiohttp.ClientSession, image_path: Path, caption: str) -> tuple[str, str]:
-    logging.info(f"Uploading {image_path} to Google Photos")
+    logging.info("Uploading %s to Google Photos", image_path)
 
     data = await asyncio.to_thread(image_path.read_bytes)
     async with session.post(
