@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Iterable
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import TypeVar, cast
+from typing import Any, TypeVar, cast
 from urllib.parse import urlparse
 
 import filetype
@@ -41,7 +41,7 @@ DEFAULT_UPLOAD_CONCURRENCY = 3
 
 
 @functools.cache
-def secrets() -> dict:
+def secrets() -> dict[str, Any]:
     SECRETS_FILE = Path(__file__).parents[1] / "secrets.yaml"
     AGE_IDENTITY = Path(PlatformDirs().user_config_path) / "age" / "tadpoles-image-downloader.agekey"
     if not (AGE_IDENTITY.exists() and SECRETS_FILE.exists()):
@@ -211,7 +211,7 @@ def upload_images(
     asyncio.run(_upload_images(images_dir, {}, upload_concurrency))
 
 
-async def _upload_images(images_dir: Path, file_captions: dict[str, str], upload_concurrency: int):
+async def _upload_images(images_dir: Path, file_captions: dict[str, str], upload_concurrency: int) -> None:
     images_dir.mkdir(exist_ok=True)
     images = [i for i in images_dir.iterdir() if i.is_file()]
     if not images:
