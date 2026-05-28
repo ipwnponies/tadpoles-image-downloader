@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: "2.3.3"
+          virtualenvs-in-project: true
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        id: cache
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
+
+      - name: Install dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: poetry install
+
+      - name: Ruff lint
+        run: poetry run ruff check .
+
+      - name: Ruff format check
+        run: poetry run ruff format --check .
+
+      - name: Type check
+        run: poetry run mypy tadpoles_image_downloader/
