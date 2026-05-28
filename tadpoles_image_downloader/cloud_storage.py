@@ -79,6 +79,7 @@ async def google_photos_session(
     credentials_file: Path = CREDENTIALS_FILE,
     token_file: Path = TOKEN_FILE,
 ) -> AsyncIterator[aiohttp.ClientSession]:
+    """Async context manager yielding an authenticated aiohttp session for Google Photos."""
     creds = await asyncio.to_thread(_load_credentials, credentials_file, token_file)
     headers = {"Authorization": f"Bearer {creds.token}"}
     async with aiohttp.ClientSession(headers=headers) as session:
@@ -86,6 +87,7 @@ async def google_photos_session(
 
 
 async def upload_to_google_photos(session: aiohttp.ClientSession, image_path: Path, caption: str) -> tuple[str, str]:
+    """Upload image bytes to Google Photos and return (upload_token, caption)."""
     logging.info("Uploading %s to Google Photos", image_path)
 
     data = await asyncio.to_thread(image_path.read_bytes)
@@ -107,6 +109,7 @@ async def upload_to_google_photos(session: aiohttp.ClientSession, image_path: Pa
 
 
 async def mint(session: aiohttp.ClientSession, upload_tokens: Sequence[tuple[str, str]]) -> None:
+    """Batch-create media items in Google Photos from previously uploaded tokens."""
     if not upload_tokens:
         logging.info("No upload tokens provided, skipping minting")
         return
