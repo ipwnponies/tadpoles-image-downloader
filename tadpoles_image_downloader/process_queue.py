@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Iterable
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import TypeVar
+from typing import TypeVar, cast
 from urllib.parse import urlparse
 
 import filetype
@@ -31,7 +31,7 @@ from tadpoles_image_downloader.cloud_storage import (
 
 app = typer.Typer()
 
-logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 
 T = TypeVar("T")
 
@@ -89,7 +89,7 @@ def write_image_file(
 ) -> None:
     """Write image data to file with timestamp in EXIF metadata."""
 
-    current_time = pendulum.parse(taken_at).in_tz(tz)
+    current_time = cast(pendulum.DateTime, pendulum.parse(taken_at)).in_tz(tz)
 
     timestamp = current_time.format("YYYY:MM:DD HH:mm:ss")
     offset = current_time.format("ZZ")
@@ -141,8 +141,12 @@ async def process_file(
     fetch_concurrency: int,
     write_concurrency: int,
 ) -> dict[str, str]:
-    with file_path.open() as handle:
-        data = json.load(handle)
+    try:
+        with file_path.open() as handle:
+            data = json.load(handle)
+    except json.JSONDecodeError:
+        logging.warning("Skipping malformed JSON queue file: %s", file_path)
+        return {}
 
     file_metadata: dict[str, str] = {}
 
@@ -154,7 +158,7 @@ async def process_file(
 
     deduped: dict[str, tuple[pendulum.DateTime, FetchedEntry]] = {}
     for fetched in fetched_entries:
-        entry_timestamp = pendulum.parse(fetched.timestamp)
+        entry_timestamp = cast(pendulum.DateTime, pendulum.parse(fetched.timestamp))
         existing = deduped.get(fetched.filename)
         if existing:
             existing_timestamp, existing_entry = existing
@@ -175,17 +179,15 @@ async def process_file(
         deduped[fetched.filename] = (entry_timestamp, fetched)
 
     if not dry_run:
+
+        def _write(entry: FetchedEntry, path: Path) -> None:
+            if entry.payload is None:
+                raise RuntimeError("payload is None in non-dry-run mode — this is a bug")
+            write_image_file(entry.payload, path, entry.timestamp)
+
         await gather_with_concurrency(
             write_concurrency,
-            (
-                asyncio.to_thread(
-                    write_image_file,
-                    entry.payload,
-                    images_dir / filename,
-                    entry.timestamp,
-                )
-                for filename, (_, entry) in deduped.items()
-            ),
+            (asyncio.to_thread(_write, entry, images_dir / filename) for filename, (_, entry) in deduped.items()),
         )
 
     for filename, (_, entry) in deduped.items():
@@ -219,7 +221,7 @@ async def _upload_images(images_dir: Path, file_captions: dict[str, str], upload
     async with google_photos_session() as session:
         upload_tokens = await gather_with_concurrency(
             upload_concurrency,
-            (upload_to_google_photos(session, image, file_captions[image.stem]) for image in images),
+            (upload_to_google_photos(session, image, file_captions.get(image.stem, "")) for image in images),
         )
         await mint(session, upload_tokens)
 
