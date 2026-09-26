@@ -1,0 +1,220 @@
+# Audit findings and proposed changes
+
+Status: **proposal, awaiting approval**. Nothing here has been implemented.
+
+Scope: full read of `tadpoles_image_downloader/`, `src/code.js`, `appsscript.json`, CI, tooling, and docs. Baseline `make lint`, `ruff format --check`, `make typecheck` all pass on `3b60aa4`.
+
+Several items overlap the open beads backlog (`.beads/backup/issues.jsonl`); those are tagged **[beads]**.
+
+Severity: **High** = data loss, silent wrong results, or credential exposure. **Med** = failure modes that block or degrade runs. **Low** = cleanup and hygiene.
+
+---
+
+## 1. Correctness bugs
+
+### 1.1 High: `batchCreate` sends every image in one request [beads: "Chunk Google Photos batchCreate requests"]
+`cloud_storage.mint` puts all upload tokens in one `mediaItems:batchCreate` call. The API accepts at most 50 items per call, so any run with more than 50 images fails at mint time.
+
+Worse, a successful HTTP response does not mean every item was created. Each item's result is in `newMediaItemResults[].status`, and nothing reads it. `_upload_images` then moves **every** image to `Done/`, so an image the API rejected is marked done and never retried.
+
+**Fix:** send chunks of up to 50. Return the set of tokens whose result has a `mediaItem`. Move only those images to `Done/`. Catch errors per chunk so one bad chunk does not throw away the chunks already created, which would re-upload them as duplicates on the next run.
+
+### 1.2 High: each JPEG is re-encoded at Pillow's default quality [beads: "Avoid full image re-encode for EXIF updates"]
+`write_image_file` does `Image.open(...).save(file, exif=exif)`. For a JPEG this decodes the image and re-encodes it at Pillow's default quality of 75, which is a permanent quality loss on every photo. The save also drops the original EXIF (including Orientation, so photos can end up rotated) and the ICC profile.
+
+**Fix:** for JPEG and WebP, use `piexif.insert(exif, data, path)`, which splices the EXIF segment in without touching the pixels. Merge into the existing EXIF (`piexif.load`) so Orientation is kept, and fall back to fresh EXIF if parsing fails. Keep the Pillow path for other formats; PNG is lossless anyway.
+
+### 1.3 High: one failed download blocks the whole pipeline indefinitely
+In `process_file`, `_fetch_entry` calls `raise_for_status()` inside a plain `asyncio.gather`. One expired or 404 Tadpoles link does three things:
+- It throws away that file's other fetches.
+- It aborts `_main`'s gather, so **no** queue file moves to `Done/` and nothing uploads.
+- It repeats on every later run, because the bad entry never leaves the queue.
+
+The only signal is a missing healthcheck ping.
+
+**Fix:** isolate failures per entry. On partial failure, rewrite the queue file atomically so it holds only the failed entries. Finish the run for everything else and exit non-zero without pinging.
+
+Trade-off: a link that is permanently dead stays queued and keeps the healthcheck red until someone removes it by hand. I think that is correct, since the failure stays visible and the other images still flow. The alternative is a retry counter per entry that moves the entry to a `Failed/` file after N attempts.
+
+### 1.4 Med: caption lookup key may not match the file on disk (conditional)
+`process_file` stores captions as `file_metadata[filename]`, where `filename` is the basename from the redirect URL. `write_image_file` swaps the suffix to the sniffed type, and `_upload_images` looks captions up by `image.stem`.
+- If Tadpoles URLs end without an extension (`abc`), the keys match.
+- If they end with one (`abc.jpg`), the stored key is `abc.jpg`, the lookup key is `abc`, and **every caption is silently dropped**.
+
+I don't know which form Tadpoles uses. **Fix:** key captions by `Path(filename).stem`, which is correct for both.
+
+### 1.5 Med: the same image can be uploaded twice across days
+`src/code.js` searches `newer_than:1d` on a daily trigger. Apps Script daily triggers fire within an hour-wide window, so two runs are sometimes less than 24 h apart. The same message then lands in two days' queue files.
+- Dedup in `enqueue` compares only against **today's** file.
+- Dedup in Python works only **within** one queue file.
+
+Result: a duplicate upload. If both files are processed in the same run, two threads also write the same output path at the same time, which can leave a corrupt file. I don't know whether the Photos API dedupes identical bytes; I would not rely on it.
+
+The window also works the other way: runs more than 24 h apart can **miss** emails. See 3.1 for the structural fix.
+
+**Minimum fix (Python):**
+- Skip any image whose stem already exists in `images_dir/Done/`. This works as a free manifest of uploaded images.
+- Write images atomically (unique temp file, then `os.replace`) so concurrent writers cannot corrupt a file.
+
+### 1.6 Med: expired OAuth refresh token crashes instead of re-authorizing
+In `_load_credentials`, `creds.refresh(Request())` raises `google.auth.exceptions.RefreshError` when the refresh token is revoked or expired. That happens every 7 days if the OAuth app is still in "Testing" publishing status. The error is not caught, so the run crashes.
+
+**Fix:** catch `RefreshError` and fall through to the browser flow.
+
+Separate caveat: on a headless scheduled host, `run_local_server` blocks forever. It would be better to detect a non-interactive session and fail fast with a clear message.
+
+### 1.7 Med: the Apps Script can overwrite the queue file and lose entries
+In `enqueue`, the `try` wraps both reading and `JSON.parse`, and the `catch` assumes "no file". If the existing file is unreadable or has invalid JSON, `existingData` stays `[]`, and the next step `setContent`s the file with **only** the new URLs. The earlier entries are gone.
+
+**Fix:** only treat "file does not exist" as a fresh start. Rethrow read and parse errors.
+
+### 1.8 Low: dry run still pings the healthcheck [beads: "Skip healthcheck ping on dry-run"]
+`_main` pings the healthcheck unconditionally, so a dry run reports a successful real run to monitoring and can hide missed runs. It also forces a dry run to need `sops` and the age key.
+
+**Fix:** ping only after a real run with zero failures.
+
+### 1.9 Low: dry run downloads full image bodies and discards them [beads: "Skip download body reads during dry-run"]
+A dry run only needs the redirect URL to get the filename. **Fix:** skip `resp.read()` in dry run.
+
+### 1.10 Low: `caption: null` from JS becomes `None` in a `str` field
+`extractCaption` returns `null`, and the Python side reads it with `entry.get("caption", "")`, which returns `None` when the key exists with a null value. It works by accident, because `mint` checks truthiness. **Fix:** `entry.get("caption") or ""`.
+
+---
+
+## 2. Security and credential handling
+
+### 2.1 High: the OAuth token file is not gitignored
+`.gitignore` lists `/token_photos.pickle` (stale), but the code writes `token_photos.json` in the working directory. That file holds `refresh_token` **and** `client_secret`. A single `git add .` publishes long-lived Google Photos credentials.
+
+**Fix:**
+- Gitignore `token_photos.json`.
+- Write the file with `0o600` permissions.
+- Consider moving both credential files to `PlatformDirs().user_config_path`, the same place the age key already lives, instead of the working directory. See 2.3.
+
+### 2.2 Med: URLs from the queue are fetched without validation
+`_fetch_entry` GETs whatever `entry["url"]` holds and follows redirects. The queue lives in Drive, so anyone who can write to that folder can make the CLI fetch arbitrary URLs. This is low likelihood, but the defense is cheap.
+
+The output filename comes from the redirect path's `.name`. An empty result or `..` gives a bad target: `Path("images").with_suffix(".jpg")` writes `images.jpg` **next to** the images directory.
+
+**Fix:**
+- Require `https` and a `tadpoles.com` host (or a subdomain) on the queued URL.
+- Reject an empty or `..` filename.
+
+### 2.3 Low: credential paths depend on the working directory
+`CREDENTIALS_FILE` and `TOKEN_FILE` are relative paths. Running from cron in another directory breaks authentication or writes the token somewhere unexpected. `secrets()` has a related problem: it uses `Path(__file__).parents[1]`, which only works for an editable install.
+
+Moving the files is a breaking change for your current setup, so it needs your call.
+
+### 2.4 Low: Apps Script has full Drive scope
+`appsscript.json` requests `https://www.googleapis.com/auth/drive`, which gives read/write access to **all** of Drive. `drive.file` is narrower, but it only covers files the script created or opened. The script would then need to create its own queue folder instead of opening an existing one by ID.
+
+Trade-off: a one-time setup change in return for a much smaller blast radius if the script is ever compromised.
+
+### 2.5 Low: CI hardening
+- Add `permissions: contents: read` at the top of `ci.yml`.
+- Pin third-party actions (`snok/install-poetry`) by commit SHA.
+- Consider Dependabot for `pip`, `npm`, and `github-actions`.
+
+---
+
+## 3. Architecture
+
+### 3.1 Replace the time window with Gmail label state (JS)
+The `newer_than:1d` window is the root cause of both the missed emails and the duplicate uploads in 1.5. A more robust design:
+- Query `label:<tadpoles> -label:<tadpoles>/queued`.
+- Enqueue the results.
+- Apply the `queued` sub-label only after the Drive write succeeds.
+
+This makes each run idempotent and self-healing after missed triggers.
+
+Cost: it needs the `gmail.modify` scope instead of `gmail.readonly`, which is broader. My recommendation is to take it, because correctness outweighs the scope increase for a personal tool. Your call.
+
+### 3.2 Treat the queue as one work set, not independent files (Python)
+Today each queue file has its own dedup and its own `ClientSession`. With the defaults, 6 files × 15 fetches means up to 90 concurrent connections to Tadpoles. Also, `process_concurrency` is reused as the write concurrency, so writes nest to 6 × 6.
+
+Proposal:
+- Load every queue file, dedupe globally, and fetch through one shared session with one global connection cap.
+- Write per-file state back only at the end: move to `Done/`, or rewrite with the failed entries.
+- Give writes their own knob, or simply let `asyncio.to_thread` bound them.
+
+This removes the cross-file write race by construction.
+
+### 3.3 Captions survive only in memory
+Captions go from queue to upload through a dict held in memory for one run. They are lost if:
+- the upload step fails and a later run uploads the leftover images, or
+- `upload-images` is run on its own.
+
+Options:
+- (a) A sidecar `captions.json` in `images_dir`, updated on write and pruned on upload. Simple, and my recommendation.
+- (b) Put the caption in an EXIF field and read it back at upload time. This is self-contained, but EXIF text fields are awkward with non-ASCII text such as emoji.
+
+### 3.4 Healthcheck failure signal
+Only success is signalled now. If the provider is healthchecks.io-style, pinging `<url>/fail` on error (and optionally `<url>/start`) gives an immediate alert instead of waiting for the grace period. I can't see the provider because the URL is encrypted.
+
+The use of `sops` for one low-sensitivity URL is also heavy. An environment variable override (for example `TADPOLES_HEALTHCHECK_URL`) with `sops` as the fallback would make CI and headless hosts simpler.
+
+---
+
+## 4. Cleanup and tooling
+
+| # | Item | Fix |
+|---|------|-----|
+| 4.1 | `HEALTHCHECK.md` describes `secrets/healthcheck-url.age` and the plain `age` CLI; the code uses `sops` and `secrets.yaml`. The rotation steps are wrong (`$XDG_CONFIG_HOME/.config/...`). | Rewrite it for `sops`: `sops updatekeys` / `sops edit secrets.yaml`. |
+| 4.2 | `.gitignore` has stale entries (`token_photos.pickle`, `worker/__pycache__`) and is missing `__pycache__/`, `.venv/`, `.mypy_cache/`, `.ruff_cache/`, `token_photos.json`. | Update it. |
+| 4.3 | `eslint.config.mjs` uses `defineConfig` from `eslint/config`, which needs ESLint ≥ 9.22, while `package.json` pins `eslint ^8.57.1` (and `@eslint/js ^9`). It also declares `globals.browser` instead of the Apps Script globals (`GmailApp`, `DriveApp`, ...). JS lint probably does not run at all, and nothing lints JS in CI. | Needs dependency approval: bump eslint to 9, add Apps Script globals, add an `npm run lint` CI job. |
+| 4.4 | `package.json` has boilerplate (`"main": "index.js"`, empty description, ISC license while the repo `LICENSE` differs). | Tidy. |
+| 4.5 | `upload_to_google_photos` accepts `caption` only to return it unchanged. | Return only the token; attach the caption at mint time. |
+| 4.6 | In `write_image_file`, the EXIF is built before the check for whether the data is an image. | Reorder. |
+| 4.7 | `logging.basicConfig` runs at import time. | Move it to a Typer `@app.callback()`. |
+| 4.8 | The mypy config is not strict, although CLAUDE.md says "strict-ish". | Try `strict = true` and fix the fallout (mostly missing `-> None` on commands). |
+| 4.9 | The Apps Script uses a mix of `var` and `const` and a fixed retry delay. | Use `const`, and exponential backoff in `safeApiCall`. |
+| 4.10 | Search is `label:${labelName}` without quotes. A label containing spaces may break the search (unverified). | Verify, then quote the label or swap spaces for hyphens. |
+| 4.11 | `.beads/backup/*` is committed. | Keep it if intentional; otherwise gitignore it. |
+
+---
+
+## 5. Testing gap
+There is no test suite. The riskiest logic is pure or easy to isolate:
+- dedup policy
+- EXIF build and write (round-trip a generated JPEG and PNG, check that `DateTimeOriginal` is set and the JPEG pixels are byte-identical)
+- chunking and per-item result parsing in `mint` (with a mocked session)
+- URL and filename validation
+
+**Needs dependency approval:** `pytest` and `pytest-asyncio` as dev dependencies, plus a `make test` target and a CI step. The alternative with no new dependency is `unittest` with `IsolatedAsyncioTestCase`, which also works.
+
+---
+
+## 6. Feature ideas (optional)
+- **Video support:** `filetype` IMAGE-only sniffing silently skips videos. Tadpoles sends videos too, and the Photos API accepts them (EXIF would be skipped for them).
+- **Target album:** an optional `--album-id` passed to `batchCreate`.
+- **Run summary:** log counts at the end (fetched, deduped, written, uploaded, failed), and include them in the healthcheck ping body.
+- **Headless runner:** a systemd timer or launchd example, plus the credential-path change in 2.3.
+
+---
+
+## Proposed implementation batches
+Each batch is independently shippable and needs no new dependencies unless marked.
+
+1. **Data safety:**
+   - 1.1 mint chunking and per-item results
+   - 1.2 lossless EXIF
+   - 1.4 caption key
+   - 2.1 gitignore and token file permissions
+   - 4.2 `.gitignore` cleanup
+2. **Resilience:**
+   - 1.3 per-entry failure isolation and queue rewrite
+   - 1.5 skip already-uploaded images and atomic writes
+   - 1.6 `RefreshError`
+   - 1.8 and 1.9 dry-run behavior
+   - 1.10 null caption
+   - 2.2 URL and filename validation
+3. **Apps Script:** 1.7 no silent overwrite, 4.9, 4.10. Optionally 3.1 (scope change, needs a decision).
+4. **Docs and CI:** 4.1, 2.5, CLAUDE.md gotcha updates.
+5. **Needs approval:** tests (section 5), the eslint fix (4.3), and the architecture items 3.2, 3.3, 3.4 and 2.3.
+
+## Decisions needed
+- [ ] Approve batches 1–4?
+- [ ] 1.3: keep failed entries queued forever, or add a retry cap and a `Failed/` file?
+- [ ] 3.1: accept the `gmail.modify` scope for label-based state?
+- [ ] 2.3: move credentials to the config directory (breaks your current path)?
+- [ ] Section 5: `pytest` or stdlib `unittest`?
