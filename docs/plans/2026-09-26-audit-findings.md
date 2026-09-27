@@ -4,7 +4,9 @@ Status: **proposal, awaiting approval**. Nothing here has been implemented.
 
 Scope: full read of `tadpoles_image_downloader/`, `src/code.js`, `appsscript.json`, CI, tooling, and docs. Baseline `make lint`, `ruff format --check`, `make typecheck` all pass on `3b60aa4`.
 
-Several items overlap the open beads backlog (`.beads/backup/issues.jsonl`); those are tagged **[beads]**.
+The beads backlog (`.beads/backup/issues.jsonl`) is stale and is not used as a reference.
+
+Findings are triaged one at a time. Each agreed finding gets a **Decision** block, which replaces the original proposal where the two differ.
 
 Severity: **High** = data loss, silent wrong results, or credential exposure. **Med** = failure modes that block or degrade runs. **Low** = cleanup and hygiene.
 
@@ -12,14 +14,25 @@ Severity: **High** = data loss, silent wrong results, or credential exposure. **
 
 ## 1. Correctness bugs
 
-### 1.1 High: `batchCreate` sends every image in one request [beads: "Chunk Google Photos batchCreate requests"]
+### 1.1 High: `batchCreate` sends every image in one request
 `cloud_storage.mint` puts all upload tokens in one `mediaItems:batchCreate` call. The API accepts at most 50 items per call, so any run with more than 50 images fails at mint time.
 
 Worse, a successful HTTP response does not mean every item was created. Each item's result is in `newMediaItemResults[].status`, and nothing reads it. `_upload_images` then moves **every** image to `Done/`, so an image the API rejected is marked done and never retried.
 
 **Fix:** send chunks of up to 50. Return the set of tokens whose result has a `mediaItem`. Move only those images to `Done/`. Catch errors per chunk so one bad chunk does not throw away the chunks already created, which would re-upload them as duplicates on the next run.
 
-### 1.2 High: each JPEG is re-encoded at Pillow's default quality [beads: "Avoid full image re-encode for EXIF updates"]
+**Decision (agreed 2026-09-27):**
+- Context: a typical run has about 5 images (p90) and at most about 10. The 50-item limit matters only for a backlog of roughly 10 or more days. The chunking fix is cheap, so it is kept.
+- Send `batchCreate` in chunks of at most 50 items. Handle errors per chunk, so a failed chunk does not discard chunks that already succeeded.
+- Treat an item as created only when its result in `newMediaItemResults` contains a `mediaItem`. Log each failed item with its filename and `status.message`.
+- `mint` returns the set of created upload tokens. `_upload_images` keeps a map from token to path and moves only created images to `images_dir/Done/`.
+- Failed images stay in `images_dir`. The next `main` run uploads everything in `images_dir`, so it retries them automatically.
+- Any upload failure makes the run exit non-zero and skip the healthcheck ping. A missed ping is the alert.
+- `upload_to_google_photos` returns only the upload token. The caption is attached at mint time.
+- Deferred: a quarantine for images that fail every time is decided with 1.3. An immediate `/fail` ping and a failure summary are decided with 3.4. Keeping captions for retried images is decided with 3.3.
+- Verification: use a fake session with 120 tokens and one failed item. Expect 3 requests of 50, 50 and 20 items. Expect 119 files moved to `Done/`, 1 file left in `images_dir`, and a non-zero exit.
+
+### 1.2 High: each JPEG is re-encoded at Pillow's default quality
 `write_image_file` does `Image.open(...).save(file, exif=exif)`. For a JPEG this decodes the image and re-encodes it at Pillow's default quality of 75, which is a permanent quality loss on every photo. The save also drops the original EXIF (including Orientation, so photos can end up rotated) and the ICC profile.
 
 **Fix:** for JPEG and WebP, use `piexif.insert(exif, data, path)`, which splices the EXIF segment in without touching the pixels. Merge into the existing EXIF (`piexif.load`) so Orientation is kept, and fall back to fresh EXIF if parsing fails. Keep the Pillow path for other formats; PNG is lossless anyway.
@@ -68,12 +81,12 @@ In `enqueue`, the `try` wraps both reading and `JSON.parse`, and the `catch` ass
 
 **Fix:** only treat "file does not exist" as a fresh start. Rethrow read and parse errors.
 
-### 1.8 Low: dry run still pings the healthcheck [beads: "Skip healthcheck ping on dry-run"]
+### 1.8 Low: dry run still pings the healthcheck
 `_main` pings the healthcheck unconditionally, so a dry run reports a successful real run to monitoring and can hide missed runs. It also forces a dry run to need `sops` and the age key.
 
 **Fix:** ping only after a real run with zero failures.
 
-### 1.9 Low: dry run downloads full image bodies and discards them [beads: "Skip download body reads during dry-run"]
+### 1.9 Low: dry run downloads full image bodies and discards them
 A dry run only needs the redirect URL to get the filename. **Fix:** skip `resp.read()` in dry run.
 
 ### 1.10 Low: `caption: null` from JS becomes `None` in a `str` field
