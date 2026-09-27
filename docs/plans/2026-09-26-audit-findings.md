@@ -37,6 +37,19 @@ Worse, a successful HTTP response does not mean every item was created. Each ite
 
 **Fix:** for JPEG and WebP, use `piexif.insert(exif, data, path)`, which splices the EXIF segment in without touching the pixels. Merge into the existing EXIF (`piexif.load`) so Orientation is kept, and fall back to fresh EXIF if parsing fails. Keep the Pillow path for other formats; PNG is lossless anyway.
 
+**Decision (agreed 2026-09-27):**
+- Context: Tadpoles serves both PNG and JPEG. A sampled PNG (768x1024 RGBA, iOS-generated) had no date tags at all; its EXIF held only Orientation, resolution and dimensions. Pillow re-encoding is lossless for PNG, so the quality loss affects JPEGs only. Severity stays High, because each JPEG loses quality silently and the loss cannot be undone.
+- Background: Google Photos dates each photo from EXIF `DateTimeOriginal`. Without it, the date is the time of upload. Tadpoles images carry no usable capture date, so the email `Date` is written as the capture time. This is deliberate and stays.
+- JPEG and WebP: write EXIF with `piexif.insert`. The pixel data is copied unchanged, with no re-encode (the metadata equivalent of `ffmpeg -c copy`). The ICC profile lives in a separate segment and is kept.
+- PNG and other formats: keep the Pillow path, which is lossless. Pass the DPI and ICC profile through.
+- Merge with the existing EXIF instead of replacing it. Keep tags that are not dates, such as Orientation. Remove every original date and time tag (`DateTime`, `DateTimeOriginal`, `DateTimeDigitized`, and the `OffsetTime*` and `SubSecTime*` variants). Write the email time into `DateTimeOriginal`, `DateTimeDigitized`, `DateTime` and `OffsetTimeOriginal`. If the existing EXIF cannot be parsed or dumped, fall back to fresh EXIF.
+- Documentation: add a code comment where the timestamp is written, and a CLAUDE.md Gotchas entry. Both say that Photos dates from EXIF, that Tadpoles images carry no usable capture date, that the email `Date` is the only source, and that this must not be removed or replaced with the image's EXIF.
+- Verification:
+  - JPEG test: pixels byte-identical, Orientation kept, ICC kept, all date fields equal to the email time, even when the source carries a different date.
+  - PNG test: pixels identical, date written.
+  - Fallback test: a JPEG with malformed EXIF still gets written with the date.
+  - Manual: upload one PNG and one JPEG, and confirm both show the email date in Google Photos.
+
 ### 1.3 High: one failed download blocks the whole pipeline indefinitely
 In `process_file`, `_fetch_entry` calls `raise_for_status()` inside a plain `asyncio.gather`. One expired or 404 Tadpoles link does three things:
 - It throws away that file's other fetches.
