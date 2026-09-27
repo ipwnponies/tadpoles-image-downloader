@@ -112,6 +112,18 @@ Trade-off: a link that is permanently dead stays queued and keeps the healthchec
 
 I don't know which form Tadpoles uses. **Fix:** key captions by `Path(filename).stem`, which is correct for both.
 
+**Decision (agreed 2026-09-27):**
+- Finding revised: this is not a live bug. Captions work today. Tadpoles URLs end in a bare ID (for example `/m/p/5J84arRcHWaYVss3jSQK7H`), and the file on disk is that ID plus an extension taken from the sniffed content type. The storing side keys by the URL name and the reading side keys by the file stem, so the two only agree because the URL has no extension. Severity: Low (hardening).
+- Structural fix: key captions by the file that was actually written.
+  - `write_image_file` returns the `Path` it wrote, or `None` when it skipped the payload.
+  - `process_file` stores the caption under `written_path.name`.
+  - `_upload_images` looks the caption up by `image.name`.
+  - One source of truth, and no derivation from the URL shape. A skipped file gets no caption automatically.
+- Dry run writes nothing, so it records no captions. That is fine, because a dry run does not upload.
+- This key is reused by any future captions sidecar (see 3.3).
+- Documentation: CLAUDE.md records that Tadpoles URLs end in a bare ID, that the extension comes from sniffing, and that captions are keyed by the name of the written file, with the reason. No README change.
+- Verification: a URL with an extension and one without both deliver their captions to `mint`. A skipped non-image gets no caption entry.
+
 ### 1.5 Med: the same image can be uploaded twice across days
 `src/code.js` searches `newer_than:1d` on a daily trigger. Apps Script daily triggers fire within an hour-wide window, so two runs are sometimes less than 24 h apart. The same message then lands in two days' queue files.
 - Dedup in `enqueue` compares only against **today's** file.
