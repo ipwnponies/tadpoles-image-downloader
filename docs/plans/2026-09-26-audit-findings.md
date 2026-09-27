@@ -8,6 +8,13 @@ The beads backlog (`.beads/backup/issues.jsonl`) is stale and is not used as a r
 
 Findings are triaged one at a time. Each agreed finding gets a **Decision** block, which replaces the original proposal where the two differ.
 
+## Documentation policy (applies to every decision)
+Each implemented decision updates two audiences:
+- **README.md (and HEALTHCHECK.md):** for the user who runs the system. It covers behaviour, limitations and what to do when something fails. Examples: link expiry, what lands in `Failed/`, how to retry.
+- **CLAUDE.md:** for agents editing the code. It covers architecture, trade-offs, and limitations discovered empirically, with the evidence, so they are not "fixed" back. Examples: the email timestamp is deliberate, and the placeholder signature.
+
+Each decision's Documentation line lists what goes where.
+
 Severity: **High** = data loss, silent wrong results, or credential exposure. **Med** = failure modes that block or degrade runs. **Low** = cleanup and hygiene.
 
 ---
@@ -30,6 +37,7 @@ Worse, a successful HTTP response does not mean every item was created. Each ite
 - Any upload failure makes the run exit non-zero and skip the healthcheck ping. A missed ping is the alert.
 - `upload_to_google_photos` returns only the upload token. The caption is attached at mint time.
 - Deferred: a quarantine for images that fail every time is decided with 1.3. An immediate `/fail` ping and a failure summary are decided with 3.4. Keeping captions for retried images is decided with 3.3.
+- Documentation: README says failed uploads stay in `images_dir` and retry on the next run, and that a failure skips the healthcheck ping. CLAUDE.md records the 50-item `batchCreate` limit and the per-item result check.
 - Verification: use a fake session with 120 tokens and one failed item. Expect 3 requests of 50, 50 and 20 items. Expect 119 files moved to `Done/`, 1 file left in `images_dir`, and a non-zero exit.
 
 ### 1.2 High: each JPEG is re-encoded at Pillow's default quality
@@ -43,7 +51,7 @@ Worse, a successful HTTP response does not mean every item was created. Each ite
 - JPEG and WebP: write EXIF with `piexif.insert`. The pixel data is copied unchanged, with no re-encode (the metadata equivalent of `ffmpeg -c copy`). The ICC profile lives in a separate segment and is kept.
 - PNG and other formats: keep the Pillow path, which is lossless. Pass the DPI and ICC profile through.
 - Merge with the existing EXIF instead of replacing it. Keep tags that are not dates, such as Orientation. Remove every original date and time tag (`DateTime`, `DateTimeOriginal`, `DateTimeDigitized`, and the `OffsetTime*` and `SubSecTime*` variants). Write the email time into `DateTimeOriginal`, `DateTimeDigitized`, `DateTime` and `OffsetTimeOriginal`. If the existing EXIF cannot be parsed or dumped, fall back to fresh EXIF.
-- Documentation: add a code comment where the timestamp is written, and a CLAUDE.md Gotchas entry. Both say that Photos dates from EXIF, that Tadpoles images carry no usable capture date, that the email `Date` is the only source, and that this must not be removed or replaced with the image's EXIF.
+- Documentation: add a code comment where the timestamp is written, and a CLAUDE.md Gotchas entry. README states that photos are dated by the email's send time, not the moment of capture. Both say that Photos dates from EXIF, that Tadpoles images carry no usable capture date, that the email `Date` is the only source, and that this must not be removed or replaced with the image's EXIF.
 - Verification:
   - JPEG test: pixels byte-identical, Orientation kept, ICC kept, all date fields equal to the email time, even when the source carries a different date.
   - PNG test: pixels identical, date written.
@@ -61,6 +69,41 @@ The only signal is a missing healthcheck ping.
 **Fix:** isolate failures per entry. On partial failure, rewrite the queue file atomically so it holds only the failed entries. Finish the run for everything else and exit non-zero without pinging.
 
 Trade-off: a link that is permanently dead stays queued and keeps the healthcheck red until someone removes it by hand. I think that is correct, since the failure stays visible and the other images still flow. The alternative is a retry counter per entry that moves the entry to a `Failed/` file after N attempts.
+
+**Decision (agreed 2026-09-27):**
+- Evidence:
+  - Tadpoles links expire after about 3 days, at a midnight cutoff in an unknown timezone. A link is guaranteed dead 96 hours after the email.
+  - An expired link does not return an error. It returns `HTTP 200`, `content-type: image/png`, with a fixed placeholder image: 200x200 PNG, 27234 bytes, sha256 `04417fa1243ef225b1c4396dc87d5b579b583dd70e1a9e0cbfa48c81a68f05ce`.
+  - Two stale links, one a few days old and one weeks old, returned the identical file.
+  - As a result, today's code uploads the placeholder to Google Photos as a real photo, silently.
+- Isolate failures per entry. Good entries are written and uploaded normally. A stalled pipeline is not acceptable, because every queued link expires during the stall.
+- The original queue file always moves to `Done/`. Entries to retry go to a Python-owned `queue/retry-<name>.json`, which matches `*.json` and is picked up next run. The Apps Script's queue files are never rewritten.
+- Age rule: an entry 96 hours or older (measured from its email timestamp) is not fetched. It goes to `queue/Failed/` as "expired by age".
+- Placeholder rule: a fetched body goes to `Failed/` if either signal matches. The signal that matched is logged.
+  - sha256 equal to the known placeholder hash (certain).
+  - 200x200 dimensions **and** a size under 50 KB (high confidence; covers a re-encoded placeholder).
+- HTTP 4xx, a malformed entry, or a payload that is not an image goes to `Failed/` immediately. No videos are expected.
+- HTTP 5xx, a timeout, or a network error is retried on every run until the entry reaches 96 hours, then goes to `Failed/`. This replaces a fixed retry count.
+- Any failure or pending retry makes the run exit non-zero and skip the healthcheck ping.
+- Logging:
+  - Each failure logs the queue file, email time, `msgId`, URL, reason and age.
+  - An end-of-run summary gives counts of fetched, written, uploaded, retried and dead-lettered entries, plus the paths of the `Failed/` files.
+  - Each `Failed/` JSON entry keeps its last error, so the details survive even if stdout is not captured.
+  - Recovery: move a `Failed/` file back into `queue/` to retry it.
+- Documentation:
+  - README: links expire after about 3 days, so the pipeline must run at least daily. Explain what `Failed/` holds and how to recover a photo manually through Gmail or the Tadpoles app. Explain how to retry.
+  - CLAUDE.md: the TTL evidence and the 96-hour rule. The placeholder signature and why status codes cannot detect expiry. Why the Apps Script's queue files are never rewritten.
+- Outside the code (user action):
+  - Check Google Photos for 200x200 placeholders that are already there.
+  - Keep the pipeline schedule and the healthcheck grace period well under 96 hours, so a failure alerts while the links are still alive.
+- Verification cases:
+  - The placeholder bytes are dead-lettered (hash).
+  - A 200x200 image at 28 KB with a different hash is dead-lettered (combination).
+  - A 200x200 image at 200 KB is not flagged.
+  - A real image is written.
+  - An entry older than 96 hours is dead-lettered with no fetch.
+  - A 503 at 50 hours goes to retry; a 503 at 97 hours is dead-lettered.
+  - A 404 is dead-lettered.
 
 ### 1.4 Med: caption lookup key may not match the file on disk (conditional)
 `process_file` stores captions as `file_metadata[filename]`, where `filename` is the basename from the redirect URL. `write_image_file` swaps the suffix to the sniffed type, and `_upload_images` looks captions up by `image.stem`.
