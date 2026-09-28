@@ -137,6 +137,26 @@ The window also works the other way: runs more than 24 h apart can **miss** emai
 - Skip any image whose stem already exists in `images_dir/Done/`. This works as a free manifest of uploaded images.
 - Write images atomically (unique temp file, then `os.replace`) so concurrent writers cannot corrupt a file.
 
+**Decision (agreed 2026-09-28):**
+- Evidence: Tadpoles emails sometimes group into Gmail threads, and are often in their own thread. `GmailApp.search` returns whole threads, and today's code reads every message in each matched thread. So days-old messages in a thread are re-queued. Their links are past the TTL, so they come back as placeholders (see 1.3). This is a live bug, and a likely source of placeholders already in the library.
+- Replace `newer_than:1d` with a watermark kept in Script Properties:
+  - `last_run_epoch`: the start time of the last successful non-dry run.
+  - `recent_msg_ids`: the IDs of messages queued within the last hour of the previous window.
+- Query: search `label:<label> after:<last_run_epoch - 3600>`. Then filter at **message** level: keep a message only if its date is after `last_run_epoch - 3600` and its ID is not in `recent_msg_ids`. Never filter at thread level.
+- The 1-hour overlap covers the delay before Gmail search shows a new email. The ID list prevents duplicates in the overlap.
+- Ordering: write the queue file first, then save the watermark and the ID list. A failure in between repeats the window (a duplicate, never a loss).
+- Dry run reads the watermark but never saves it.
+- First run with no watermark: start from now minus 3 days, which is about the link TTL. Older links are dead anyway.
+- No new permissions; `gmail.readonly` stays. A Gmail label as the state (the old 3.1 proposal) is rejected: it needs `gmail.modify`, and GmailApp labels whole threads, so a new message in an already-labelled thread would be missed.
+- Python side: write images atomically (unique temp file, then rename), so two copies of the same image in one run cannot corrupt the output. No Python de-duplication state across runs, because the watermark removes the cause.
+- Documentation:
+  - README: the script remembers its last run, so a missed trigger is picked up by the next run. Emails older than about 3 days cannot be recovered, because the links expire.
+  - CLAUDE.md: why a watermark instead of `newer_than`; the thread pitfall and the per-message filter; why labels were rejected; the write-then-save ordering.
+- Verification (Apps Script dry run, logging decisions):
+  - A thread holding an old and a new message queues only the new one.
+  - Two runs in a row do not queue the same message twice.
+  - A saved watermark from 3 days ago picks up everything since.
+
 ### 1.6 Med: expired OAuth refresh token crashes instead of re-authorizing
 In `_load_credentials`, `creds.refresh(Request())` raises `google.auth.exceptions.RefreshError` when the refresh token is revoked or expired. That happens every 7 days if the OAuth app is still in "Testing" publishing status. The error is not caught, so the run crashes.
 
@@ -201,6 +221,8 @@ Trade-off: a one-time setup change in return for a much smaller blast radius if 
 ## 3. Architecture
 
 ### 3.1 Replace the time window with Gmail label state (JS)
+**Merged into 1.5 (2026-09-28).** The label-based design below is rejected; see the 1.5 decision.
+
 The `newer_than:1d` window is the root cause of both the missed emails and the duplicate uploads in 1.5. A more robust design:
 - Query `label:<tadpoles> -label:<tadpoles>/queued`.
 - Enqueue the results.
