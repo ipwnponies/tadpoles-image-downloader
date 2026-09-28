@@ -164,6 +164,21 @@ In `_load_credentials`, `creds.refresh(Request())` raises `google.auth.exception
 
 Separate caveat: on a headless scheduled host, `run_local_server` blocks forever. It would be better to detect a non-interactive session and fail fast with a clear message.
 
+**Decision (agreed 2026-09-28):**
+- Context: the pipeline runs on a schedule, never interactively. The user has not needed to log in again in 2 years, so the OAuth app is effectively in production status and the 7-day refresh-token expiry does not apply. A rejected refresh is rare (revocation or a Google security event). Severity: Low.
+- The real risk is the failure mode on a schedule:
+  - A rejected refresh crashes with a raw `RefreshError` stack trace.
+  - A missing or unreadable token file calls `run_local_server`, which hangs forever waiting for a browser.
+- `_load_credentials` never opens a browser. When the token is missing or the refresh is rejected, it raises a clear error: "Google Photos login required: run `poetry run main login` in a terminal". The run exits non-zero and the healthcheck alerts.
+- Add a `login` command (`poetry run main login`) that runs the browser flow and writes `token_photos.json`. It is run by hand, for first setup or after a revocation.
+- Documentation:
+  - README: first-time setup uses `login`, and so does recovery after a "login required" alert.
+  - CLAUDE.md: scheduled runs must never start the browser flow (it hangs), which is why login is a separate command.
+- Verification:
+  - A missing token file gives a clear error, a non-zero exit, and no hang.
+  - A token file with a rejected refresh token gives the same clear error.
+  - `login` runs the flow and writes the token file.
+
 ### 1.7 Med: the Apps Script can overwrite the queue file and lose entries
 In `enqueue`, the `try` wraps both reading and `JSON.parse`, and the `catch` assumes "no file". If the existing file is unreadable or has invalid JSON, `existingData` stays `[]`, and the next step `setContent`s the file with **only** the new URLs. The earlier entries are gone.
 
