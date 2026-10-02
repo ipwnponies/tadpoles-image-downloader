@@ -273,6 +273,18 @@ The output filename comes from the redirect path's `.name`. An empty result or `
 - Require `https` and a `tadpoles.com` host (or a subdomain) on the queued URL.
 - Reject an empty or `..` filename.
 
+**Decision (agreed 2026-10-02):**
+- Severity lowered to Low. Exploiting this needs write access to the Drive queue folder, which in practice means the Google account is already compromised. The fix is cheap defence in depth.
+- Tested: a final URL ending in `/` gives an empty name, and `(images_dir / "").with_suffix(".png")` writes `images.png` next to `images_dir`. A name of `..` gives `...png` inside it. `Path.name` prevents deeper traversal.
+- Before fetching, require scheme `https` and a host of `tadpoles.com` or a subdomain of it. A failure is permanent and goes to `Failed/` (per 1.3).
+- After the redirect, reject an empty, `.` or `..` filename; it goes to `Failed/`.
+- Do not restrict the redirect target's host: a valid link may redirect to an unknown storage host.
+- Documentation: CLAUDE.md notes that Python re-validates queue URLs because the queue is external input, and the Apps Script regex is not the only guard.
+- Verification:
+  - `http://`, `https://evil.com/...` and `https://tadpoles.com.evil.com/...` are rejected without a fetch.
+  - `https://www.tadpoles.com/m/p/X` is accepted.
+  - A final URL ending in `/` is rejected, and nothing is written outside `images_dir`.
+
 ### 2.3 Low: credential paths depend on the working directory
 **Merged into 2.1 (2026-10-02):** paths are anchored to the repo root.
 
