@@ -145,7 +145,7 @@ The window also works the other way: runs more than 24 h apart can **miss** emai
 - Query: search `label:<label> after:<last_run_epoch - 3600>`. Then filter at **message** level: keep a message only if its date is after `last_run_epoch - 3600` and its ID is not in `recent_msg_ids`. Never filter at thread level.
 - The 1-hour overlap covers the delay before Gmail search shows a new email. The ID list prevents duplicates in the overlap.
 - Ordering: write the queue file first, then save the watermark and the ID list. A failure in between repeats the window (a duplicate, never a loss).
-- Serialise runs with `LockService.getScriptLock()`. A run that cannot get the lock within 30 seconds logs "another run in progress" and exits. Without the lock, a manual run and the trigger could overlap, read the same watermark, and queue the same emails twice. (Added 2026-10-02 while deciding 1.7.)
+- Serialise runs with `LockService.getScriptLock()`. A run that cannot get the lock within 30 seconds logs "another run in progress" and exits. Without the lock, a manual run and the trigger could overlap, read the same watermark, and queue the same emails twice. (Added 2026-10-02 while deciding 1.7.) The lock API was described from memory, because the docs host was unreachable from the analysis environment. Verify `getScriptLock`, `tryLock` and `releaseLock` against https://developers.google.com/apps-script/reference/lock/lock-service before implementing.
 - Dry run reads the watermark but never saves it.
 - First run with no watermark: start from now minus 3 days, which is about the link TTL. Older links are dead anyway.
 - No new permissions; `gmail.readonly` stays. A Gmail label as the state (the old 3.1 proposal) is rejected: it needs `gmail.modify`, and GmailApp labels whole threads, so a new message in an already-labelled thread would be missed.
@@ -205,6 +205,19 @@ In `enqueue`, the `try` wraps both reading and `JSON.parse`, and the `catch` ass
 `_main` pings the healthcheck unconditionally, so a dry run reports a successful real run to monitoring and can hide missed runs. It also forces a dry run to need `sops` and the age key.
 
 **Fix:** ping only after a real run with zero failures.
+
+**Decision (agreed 2026-10-02):**
+- Ping the healthcheck only after a real (non-dry) run with zero failures, consistent with 1.1 and 1.3.
+- A dry run ends by logging `DRY RUN: nothing written or uploaded, healthcheck not pinged`, so its log cannot be mistaken for a real run.
+- A dry run no longer needs `sops` or the age key.
+- Risk this closes: dry run is the default, so a schedule that omits `--no-dry-run` would do nothing every day while the healthcheck stayed green, and photos would pass their TTL unnoticed.
+- Documentation:
+  - README: dry run is the default; the schedule must pass `--no-dry-run`; a dry run never pings.
+  - CLAUDE.md: replace the gotcha "it still pings the healthcheck URL unconditionally".
+- Verification:
+  - A dry run does not call the ping and does not need `sops`.
+  - A real run with no failures pings.
+  - A real run with any failure does not ping.
 
 ### 1.9 Low: dry run downloads full image bodies and discards them
 A dry run only needs the redirect URL to get the filename. **Fix:** skip `resp.read()` in dry run.
