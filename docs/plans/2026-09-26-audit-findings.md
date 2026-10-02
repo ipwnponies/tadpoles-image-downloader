@@ -145,6 +145,7 @@ The window also works the other way: runs more than 24 h apart can **miss** emai
 - Query: search `label:<label> after:<last_run_epoch - 3600>`. Then filter at **message** level: keep a message only if its date is after `last_run_epoch - 3600` and its ID is not in `recent_msg_ids`. Never filter at thread level.
 - The 1-hour overlap covers the delay before Gmail search shows a new email. The ID list prevents duplicates in the overlap.
 - Ordering: write the queue file first, then save the watermark and the ID list. A failure in between repeats the window (a duplicate, never a loss).
+- Serialise runs with `LockService.getScriptLock()`. A run that cannot get the lock within 30 seconds logs "another run in progress" and exits. Without the lock, a manual run and the trigger could overlap, read the same watermark, and queue the same emails twice. (Added 2026-10-02 while deciding 1.7.)
 - Dry run reads the watermark but never saves it.
 - First run with no watermark: start from now minus 3 days, which is about the link TTL. Older links are dead anyway.
 - No new permissions; `gmail.readonly` stays. A Gmail label as the state (the old 3.1 proposal) is rejected: it needs `gmail.modify`, and GmailApp labels whole threads, so a new message in an already-labelled thread would be missed.
@@ -183,6 +184,22 @@ Separate caveat: on a headless scheduled host, `run_local_server` blocks forever
 In `enqueue`, the `try` wraps both reading and `JSON.parse`, and the `catch` assumes "no file". If the existing file is unreadable or has invalid JSON, `existingData` stays `[]`, and the next step `setContent`s the file with **only** the new URLs. The earlier entries are gone.
 
 **Fix:** only treat "file does not exist" as a fresh start. Rethrow read and parse errors.
+
+**Decision (agreed 2026-10-02):**
+- Root cause: keying the queue file on the UTC date forces a read-merge-write cycle whenever two runs share a date. Read-modify-write on a shared file is not atomic. If the read fails (a transient Drive error, or invalid JSON), the `catch` treats it as "no file yet" and the write overwrites earlier entries.
+- Write-once queue files: each run creates one new file named by its start time with second granularity, for example `2026-10-02T071503Z.json`. A run never reads, merges or updates an existing queue file. The merge code in `enqueue` is deleted.
+- Second granularity is enough: the script lock from 1.5 makes runs strictly sequential, and each run takes longer than a second.
+- A run with no new emails writes no file. A failed run writes no file and does not advance the watermark, so the next run covers the same window.
+- Consequence: runs can happen any number of times a day (scheduled, manual, catch-up) with no special cases. Python already processes every `*.json` in `queue/`, so it needs no change.
+- The same rule already holds on the Python side (1.3): queue files are only moved to `Done/`, never rewritten, and retries go into new `retry-*.json` files. The whole queue is write-once.
+- Documentation:
+  - README: one queue file per run, so runs can happen any number of times a day.
+  - CLAUDE.md: queue files are write-once on both sides, and why (read-modify-write loses data). Replace "one JSON file per day" in the architecture section. Mention the script lock.
+- Verification:
+  - Two runs on the same day produce two files, and the first is untouched.
+  - A run with no new emails writes no file.
+  - Python processes both files.
+  - A second run started while the first holds the lock waits, then proceeds or skips; it never interleaves.
 
 ### 1.8 Low: dry run still pings the healthcheck
 `_main` pings the healthcheck unconditionally, so a dry run reports a successful real run to monitoring and can hide missed runs. It also forces a dry run to need `sops` and the age key.
