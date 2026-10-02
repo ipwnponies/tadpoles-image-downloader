@@ -251,6 +251,19 @@ A dry run only needs the redirect URL to get the filename. **Fix:** skip `resp.r
 - Write the file with `0o600` permissions.
 - Consider moving both credential files to `PlatformDirs().user_config_path`, the same place the age key already lives, instead of the working directory. See 2.3.
 
+**Decision (agreed 2026-10-02):**
+- Checked: `token_photos.json` is not matched by `.gitignore`, and neither it nor `client.json` has ever been committed. Nothing leaked, and nothing needs rotating.
+- `.gitignore`: add `/token_photos.json`; remove the stale `/token_photos.pickle` and `worker/__pycache__`; add `__pycache__/`, `.venv/`, `.mypy_cache/`, `.ruff_cache/`. This absorbs 4.2.
+- Write the token file with owner-only permissions (`0600`).
+- Anchor `client.json` and `token_photos.json` to the repo root (`Path(__file__).parents[1]`), the same way `secrets.yaml` is found. Reason: after 1.6, `login` is run by hand. With paths relative to the working directory, running `login` from another directory would put the token where the scheduled job never looks. The scheduled job runs from the repo root, so no file moves. This absorbs 2.3.
+- Documentation:
+  - README: `client.json` and `token_photos.json` live in the repo root, are secrets, are gitignored, and must never be committed. If one leaks, revoke access in the Google account and run `login`.
+  - CLAUDE.md: replace the gotcha that says `token_photos.json` is not ignored. Note that credential paths are anchored to the repo root and why.
+- Verification:
+  - `git check-ignore token_photos.json` matches.
+  - After `login`, `stat -c %a token_photos.json` prints `600`.
+  - Running `login` and `main` from a directory other than the repo root reads and writes the token in the repo root.
+
 ### 2.2 Med: URLs from the queue are fetched without validation
 `_fetch_entry` GETs whatever `entry["url"]` holds and follows redirects. The queue lives in Drive, so anyone who can write to that folder can make the CLI fetch arbitrary URLs. This is low likelihood, but the defense is cheap.
 
@@ -261,6 +274,8 @@ The output filename comes from the redirect path's `.name`. An empty result or `
 - Reject an empty or `..` filename.
 
 ### 2.3 Low: credential paths depend on the working directory
+**Merged into 2.1 (2026-10-02):** paths are anchored to the repo root.
+
 `CREDENTIALS_FILE` and `TOKEN_FILE` are relative paths. Running from cron in another directory breaks authentication or writes the token somewhere unexpected. `secrets()` has a related problem: it uses `Path(__file__).parents[1]`, which only works for an editable install.
 
 Moving the files is a breaking change for your current setup, so it needs your call.
@@ -322,7 +337,7 @@ The use of `sops` for one low-sensitivity URL is also heavy. An environment vari
 | # | Item | Fix |
 |---|------|-----|
 | 4.1 | `HEALTHCHECK.md` describes `secrets/healthcheck-url.age` and the plain `age` CLI; the code uses `sops` and `secrets.yaml`. The rotation steps are wrong (`$XDG_CONFIG_HOME/.config/...`). | Rewrite it for `sops`: `sops updatekeys` / `sops edit secrets.yaml`. |
-| 4.2 | `.gitignore` has stale entries (`token_photos.pickle`, `worker/__pycache__`) and is missing `__pycache__/`, `.venv/`, `.mypy_cache/`, `.ruff_cache/`, `token_photos.json`. | Update it. |
+| 4.2 (merged into 2.1) | `.gitignore` has stale entries (`token_photos.pickle`, `worker/__pycache__`) and is missing `__pycache__/`, `.venv/`, `.mypy_cache/`, `.ruff_cache/`, `token_photos.json`. | Update it. |
 | 4.3 | `eslint.config.mjs` uses `defineConfig` from `eslint/config`, which needs ESLint ≥ 9.22, while `package.json` pins `eslint ^8.57.1` (and `@eslint/js ^9`). It also declares `globals.browser` instead of the Apps Script globals (`GmailApp`, `DriveApp`, ...). JS lint probably does not run at all, and nothing lints JS in CI. | Needs dependency approval: bump eslint to 9, add Apps Script globals, add an `npm run lint` CI job. |
 | 4.4 | `package.json` has boilerplate (`"main": "index.js"`, empty description, ISC license while the repo `LICENSE` differs). | Tidy. |
 | 4.5 | `upload_to_google_photos` accepts `caption` only to return it unchanged. | Return only the token; attach the caption at mint time. |
