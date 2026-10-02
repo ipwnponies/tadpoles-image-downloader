@@ -222,8 +222,22 @@ In `enqueue`, the `try` wraps both reading and `JSON.parse`, and the `catch` ass
 ### 1.9 Low: dry run downloads full image bodies and discards them
 A dry run only needs the redirect URL to get the filename. **Fix:** skip `resp.read()` in dry run.
 
+**Decision (agreed 2026-10-02):**
+- The original proposal (skip `resp.read()` in a dry run) is withdrawn. Since 1.3, a real run decides from the body whether an entry is a placeholder, not an image, or a real photo. A dry run without the body would report "OK" for entries a real run would dead-letter.
+- Instead, a dry run reads the body and runs the full checks (age rule, placeholder detection, image type), but writes and uploads nothing. Its summary shows exactly what a real run would do, including which entries would go to `Failed/`.
+- Cost: about 5 images a day, a few MB. Negligible.
+- Implemented as part of the 1.3 work.
+- Verification: a dry run over a queue containing the placeholder bytes reports that entry as "would dead-letter: placeholder", and writes no files.
+
 ### 1.10 Low: `caption: null` from JS becomes `None` in a `str` field
 `extractCaption` returns `null`, and the Python side reads it with `entry.get("caption", "")`, which returns `None` when the key exists with a null value. It works by accident, because `mint` checks truthiness. **Fix:** `entry.get("caption") or ""`.
+
+**Decision (agreed 2026-10-02):**
+- Root cause: the value is `None` while the field is annotated `str`. `entry` is typed `dict[str, str]`, but JSON can hold `null`, so mypy cannot see the mismatch. It works today only because `mint` checks truthiness, which treats `None` and `""` alike. Any code that uses the caption as a string would crash or write the literal text "None".
+- Python: normalise with `entry.get("caption") or ""`, so a missing key and `null` both become `""`. Keep this tolerance, because older queue files contain `null`.
+- Apps Script: `extractCaption` returns `""` instead of `null`.
+- Documentation: none needed (invisible to the user).
+- Verification: entries with `"caption": null`, with the key missing, and with text. The first two become `""`; the third is kept.
 
 ---
 
