@@ -412,6 +412,14 @@ Options:
 - (a) A sidecar `captions.json` in `images_dir`, updated on write and pruned on upload. Simple, and my recommendation.
 - (b) Put the caption in an EXIF field and read it back at upload time. This is self-contained, but EXIF text fields are awkward with non-ASCII text such as emoji.
 
+**Decision (agreed 2026-10-03):**
+- After 3.2, a failed upload becomes a queue retry entry, and each entry carries its caption. So retried uploads keep their captions automatically.
+- The only remaining gap is manual recovery with `upload-images` from a kept temp dir, which uploads without captions. The user does not plan to upload manually. No sidecar file is added.
+- A retry run always fetches again; it never reuses images from a previous run's temp dir. Reuse would need a stable directory or a record of the previous temp path, plus checks per entry, which brings back a second durable store. Re-fetching a handful of images costs nothing at this volume.
+- Documentation:
+  - README: `upload-images` does not apply captions.
+  - CLAUDE.md: retry runs always re-fetch by design; `images_dir` is scratch and must not become durable state.
+
 ### 3.4 Healthcheck failure signal
 Only success is signalled now. If the provider is healthchecks.io-style, pinging `<url>/fail` on error (and optionally `<url>/start`) gives an immediate alert instead of waiting for the grace period. I can't see the provider because the URL is encrypted.
 
