@@ -467,6 +467,17 @@ The use of `sops` for one low-sensitivity URL is also heavy. An environment vari
 | 4.10 | Search is `label:${labelName}` without quotes. A label containing spaces may break the search (unverified). | Verify, then quote the label or swap spaces for hyphens. |
 | 4.11 | `.beads/backup/*` is committed. | Keep it if intentional; otherwise gitignore it. |
 
+**Decisions for section 4 (agreed 2026-10-03):**
+- Already covered: 4.2 by 2.1; 4.5 by 1.1 (`upload_to_google_photos` returns only the token); 4.6 by the 1.2 rewrite of `write_image_file`.
+- 4.1: rewrite `HEALTHCHECK.md` for `sops` and `secrets.yaml` (key location, `sops edit`, rotating the age key with `sops updatekeys`), and add the 3.4 dashboard settings.
+- 4.3 (dependency change approved by the user): bump `eslint` to 9 in `package.json` and regenerate `package-lock.json` with npm. Replace `globals.browser` with Apps Script globals (`GmailApp`, `DriveApp`, `PropertiesService`, `LockService`, `Utilities`, `Logger`, `MimeType`). Add an `npm run lint` script and a CI job that runs it.
+- 4.4: `package.json` license `ISC` becomes `MIT` (matching `LICENSE`); remove `"main": "index.js"`; add a description. Metadata only.
+- 4.7: move `logging.basicConfig` into a Typer `@app.callback()`, so importing the module has no side effects.
+- 4.8: set `strict = true` in the mypy config and fix what it flags. Update the CLAUDE.md "strict-ish" wording.
+- 4.9: the Apps Script runtime is V8 (`appsscript.json`), which supports `const` and `let`. `var labelName` is assigned once, so it becomes `const`. `safeApiCall` uses exponential backoff (1 s, 2 s, 4 s) via `Utilities.sleep`. Lands in the 1.5 and 1.7 Apps Script rewrite.
+- 4.10: the user's label has no space, but Gmail allows spaces, so handle it defensively. Unverified: whether Gmail search accepts `label:"name with space"`, or needs spaces replaced with hyphens (`label:name-with-space`). Check with a throwaway label containing a space and a dry run that logs the match count; use the form that matches.
+- 4.11: delete `.beads/` from the repository and add `.beads/` to `.gitignore`. The backlog is stale; git history keeps it.
+
 ---
 
 ## 5. Testing gap
