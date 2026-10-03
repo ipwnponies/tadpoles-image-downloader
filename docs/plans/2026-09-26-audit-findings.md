@@ -148,7 +148,8 @@ The window also works the other way: runs more than 24 h apart can **miss** emai
 - Serialise runs with `LockService.getScriptLock()`. A run that cannot get the lock within 30 seconds logs "another run in progress" and exits. Without the lock, a manual run and the trigger could overlap, read the same watermark, and queue the same emails twice. (Added 2026-10-02 while deciding 1.7.) The lock API was described from memory, because the docs host was unreachable from the analysis environment. Verify `getScriptLock`, `tryLock` and `releaseLock` against https://developers.google.com/apps-script/reference/lock/lock-service before implementing.
 - Dry run reads the watermark but never saves it.
 - First run with no watermark: start from now minus 3 days, which is about the link TTL. Older links are dead anyway.
-- No new permissions; `gmail.readonly` stays. A Gmail label as the state (the old 3.1 proposal) is rejected: it needs `gmail.modify`, and GmailApp labels whole threads, so a new message in an already-labelled thread would be missed.
+- No new permissions; `gmail.readonly` stays.
+- Gmail search excludes Spam and Trash. Adding `in:anywhere` was considered and rejected: the user confirmed Tadpoles emails do not land in Spam. Quote the label in the query (`label:"<name>"`), as confirmed in Phase 0. A Gmail label as the state (the old 3.1 proposal) is rejected: it needs `gmail.modify`, and GmailApp labels whole threads, so a new message in an already-labelled thread would be missed.
 - Python side: write images atomically (unique temp file, then rename), so two copies of the same image in one run cannot corrupt the output. No Python de-duplication state across runs, because the watermark removes the cause.
 - Documentation:
   - README: the script remembers its last run, so a missed trigger is picked up by the next run. Emails older than about 3 days cannot be recovered, because the links expire.
