@@ -32,13 +32,13 @@ Worse, a successful HTTP response does not mean every item was created. Each ite
 - Context: a typical run has about 5 images (p90) and at most about 10. The 50-item limit matters only for a backlog of roughly 10 or more days. The chunking fix is cheap, so it is kept.
 - Send `batchCreate` in chunks of at most 50 items. Handle errors per chunk, so a failed chunk does not discard chunks that already succeeded.
 - Treat an item as created only when its result in `newMediaItemResults` contains a `mediaItem`. Log each failed item with its filename and `status.message`.
-- `mint` returns the set of created upload tokens. `_upload_images` keeps a map from token to path and moves only created images to `images_dir/Done/`.
-- Failed images stay in `images_dir`. The next `main` run uploads everything in `images_dir`, so it retries them automatically.
+- `mint` returns the set of created upload tokens. The caller keeps a map from token to entry, so it knows exactly which entries were created.
+- **Revised 2026-10-03 (see 3.2):** `images_dir` is a fresh temp directory on every run, so it cannot hold retries. An entry whose upload failed becomes a retry entry in the queue (`retry-<run time>.json`), and the next run fetches and uploads it again while it is within 96 hours (1.3). The queue is the only durable state.
 - Any upload failure makes the run exit non-zero and skip the healthcheck ping. A missed ping is the alert.
 - `upload_to_google_photos` returns only the upload token. The caption is attached at mint time.
 - Deferred: a quarantine for images that fail every time is decided with 1.3. An immediate `/fail` ping and a failure summary are decided with 3.4. Keeping captions for retried images is decided with 3.3.
-- Documentation: README says failed uploads stay in `images_dir` and retry on the next run, and that a failure skips the healthcheck ping. CLAUDE.md records the 50-item `batchCreate` limit and the per-item result check.
-- Verification: use a fake session with 120 tokens and one failed item. Expect 3 requests of 50, 50 and 20 items. Expect 119 files moved to `Done/`, 1 file left in `images_dir`, and a non-zero exit.
+- Documentation: README says failed uploads are retried from the queue on the next run, and that a failure skips the healthcheck ping. CLAUDE.md records the 50-item `batchCreate` limit and the per-item result check.
+- Verification: use a fake session with 120 tokens and one failed item. Expect 3 requests of 50, 50 and 20 items. Expect 119 entries reported as created, 1 entry written to the run's retry file, and a non-zero exit.
 
 ### 1.2 High: each JPEG is re-encoded at Pillow's default quality
 `write_image_file` does `Image.open(...).save(file, exif=exif)`. For a JPEG this decodes the image and re-encodes it at Pillow's default quality of 75, which is a permanent quality loss on every photo. The save also drops the original EXIF (including Orientation, so photos can end up rotated) and the ICC profile.
@@ -77,7 +77,7 @@ Trade-off: a link that is permanently dead stays queued and keeps the healthchec
   - Two stale links, one a few days old and one weeks old, returned the identical file.
   - As a result, today's code uploads the placeholder to Google Photos as a real photo, silently.
 - Isolate failures per entry. Good entries are written and uploaded normally. A stalled pipeline is not acceptable, because every queued link expires during the stall.
-- The original queue file always moves to `Done/`. Entries to retry go to a Python-owned `queue/retry-<name>.json`, which matches `*.json` and is picked up next run. The Apps Script's queue files are never rewritten.
+- The original queue file always moves to `Done/`. Entries to retry go to a Python-owned retry file, which matches `*.json` and is picked up next run. The Apps Script's queue files are never rewritten. **Revised 2026-10-03 (see 3.2):** one write-once `retry-<run time>.json` per run, holding retries from every source file, and written after the upload stage.
 - Age rule: an entry 96 hours or older (measured from its email timestamp) is not fetched. It goes to `queue/Failed/` as "expired by age".
 - Placeholder rule: a fetched body goes to `Failed/` if either signal matches. The signal that matched is logged.
   - sha256 equal to the known placeholder hash (certain).
@@ -374,6 +374,34 @@ Proposal:
 - Give writes their own knob, or simply let `asyncio.to_thread` bound them.
 
 This removes the cross-file write race by construction.
+
+**Decision (agreed 2026-10-03):**
+- Context: queue files are only a write partition for the Apps Script (write-once, see 1.7). They carry no meaning for processing; they matter only for bookkeeping. Uploads were already batched across files.
+- Context: the scheduled invocation is `poetry run main main --queue-dir $queue_dir --images-dir (mktemp -d /tmp/tadpoles.XXXXXX) --no-dry-run` (fish). `images_dir` is a new temp directory every run, so it is scratch, not durable state. Today's code moves each queue file to `Done/` before uploading, so any upload failure already loses those photos.
+- Restructure `process_queue.py` into stages over one combined list of entries:
+  1. Load every `queue/*.json` (including retry files) into one list. Each entry remembers its source file.
+  2. Pre-filter: URL validation (2.2) and the 96-hour age rule (1.3). Failures go to the dead-letter list.
+  3. De-duplicate across all entries, keeping the earliest timestamp per image.
+  4. Fetch with one shared HTTP session, up to `--fetch-concurrency` (default 15) at once.
+  5. Classify per 1.3: placeholder, not an image, or 4xx is dead-lettered; 5xx or a network error is retried.
+  6. Write EXIF and save atomically (1.2, 1.5) on the thread pool.
+  7. Upload: up to `--upload-concurrency` (default 3) at once, then mint in chunks of 50 (1.1). Any entry whose upload or mint failed joins the retry list.
+  8. Retire: write one `retry-<run time>.json` and one `Failed/<run time>.json` (both write-once, only if non-empty), **then** move every source file to `Done/`.
+  9. Report: summary, exit code, healthcheck ping (1.3, 1.8).
+- Upload happens before retirement. A crash before step 8 leaves the source files in `queue/`, so the next run redoes the work. A crash after mint but before retirement can upload the same photos twice; that window is small and accepted.
+- The queue is the only durable state. Every failure (fetch or upload) takes the same path: a retry entry in the queue.
+- The temp `images_dir` is deleted at the end of a fully successful run, and kept on failure with its path logged, for debugging and manual recovery via `upload-images`.
+- CLI: remove `--process-concurrency`, which no longer means anything. The scheduled command does not pass it. `--fetch-concurrency` and `--upload-concurrency` each control one thing.
+- Removes the CLAUDE.md gotcha about `process_concurrency`.
+- Documentation:
+  - README: the pipeline stages in brief; `images_dir` is scratch and may be a temp directory; failures are retried from the queue; a kept temp dir after a failure can be uploaded with `upload-images`.
+  - CLAUDE.md: the stage order and why upload precedes retirement; queue files are bookkeeping partitions only; the queue is the only durable state.
+- Verification:
+  - Two queue files plus a retry file sharing one image produce one fetch and one written file.
+  - All source files end in `Done/`, with at most one retry file and one `Failed/` file for the run.
+  - A simulated upload failure puts that entry in the run's retry file, and the next run fetches and uploads it again.
+  - A crash simulated before retirement leaves the source files in `queue/`.
+  - A successful run deletes its temp `images_dir`; a failed run keeps it and logs the path.
 
 ### 3.3 Captions survive only in memory
 Captions go from queue to upload through a dict held in memory for one run. They are lost if:
