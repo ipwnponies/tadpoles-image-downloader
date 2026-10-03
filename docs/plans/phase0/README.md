@@ -31,6 +31,18 @@ Nothing here touches the production project or the production queue folder.
 
 Afterwards: delete the spike project, and remove the `spike test` label.
 
+## Result so far (2026-10-03)
+- Row 1 passed: the consent screen showed Drive access to "only the specific Google Drive files you use with this app", and Gmail "View your email messages and settings" (read-only).
+- Row 2 failed with `DriveApp`: `Exception: Specified permissions are not sufficient to call DriveApp.createFolder. Required permissions: https://www.googleapis.com/auth/drive`. So `DriveApp` needs the full `drive` scope.
+
+## Fallback: Advanced Drive service
+1. In the editor, click **Services (+)**, choose **Drive API**, version **v3**, identifier `Drive`, then **Add**.
+2. Add a new script file named `AdvancedDrive` and paste this folder's `AdvancedDrive.gs`.
+3. Run, each separately and in order: `adv1_createFolderAndFile`, `adv2_reopenAndWrite`, `adv3_productionFolderIsNotReachable`, then check Drive sync for `tadpoles-queue-spike-adv`. Run `adv6_cleanup` last (instead of `step6_cleanup`).
+4. `step4_labelQuoting` and `step5_lockService` do not use Drive; run them as before.
+
+The same decision rule applies to rows 2 to 4, using the `adv*` functions.
+
 ## Decision rule (finding 2.4)
 - **Rows 2 to 4 pass:** the production rewrite uses `DriveApp` with `drive.file`.
 - **Row 2 or 3 fails:** repeat with the Advanced Drive service (Services > Drive API) under `drive.file`, before deciding.
