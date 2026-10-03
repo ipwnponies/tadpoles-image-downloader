@@ -339,6 +339,16 @@ Do the cutover between two scheduled runs. The seeded watermark prevents missed 
 - Pin third-party actions (`snok/install-poetry`) by commit SHA.
 - Consider Dependabot for `pip`, `npm`, and `github-actions`.
 
+**Decision (agreed 2026-10-03):**
+- Context: CI runs `ruff check`, `ruff format --check` and `mypy`. The user pushes to branches without opening PRs, and also commits straight to `main`. The pre-commit hook covers ruff locally, so CI's unique value is mypy, plus a safety net when the hook is not installed.
+- Add `permissions: contents: read` at the workflow top level.
+- Add the Python version to the venv cache key, so a Python bump cannot restore a venv built for the old interpreter.
+- Keep triggers as they are: `push` on all branches is the user's main feedback loop.
+- Keep `snok/install-poetry` (and `actions/*`) pinned by tag, not SHA. With no secrets in CI and a read-only token, SHA pinning without an update mechanism buys little.
+- No Dependabot.
+- Documentation: CLAUDE.md notes the read-only token and that actions are pinned by tag on purpose.
+- Verification: CI passes on the branch, and the job log shows `Contents: read` for the token.
+
 ---
 
 ## 3. Architecture
