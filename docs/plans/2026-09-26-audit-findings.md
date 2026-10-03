@@ -274,7 +274,7 @@ The output filename comes from the redirect path's `.name`. An empty result or `
 - Reject an empty or `..` filename.
 
 **Decision (agreed 2026-10-02):**
-- Severity lowered to Low. Exploiting this needs write access to the Drive queue folder, which in practice means the Google account is already compromised. The fix is cheap defence in depth.
+- Severity lowered to Low. The Drive queue folder is not shared with anyone (confirmed 2026-10-03). Exploiting this needs write access to the Drive queue folder, which in practice means the Google account is already compromised. The fix is cheap defence in depth.
 - Tested: a final URL ending in `/` gives an empty name, and `(images_dir / "").with_suffix(".png")` writes `images.png` next to `images_dir`. A name of `..` gives `...png` inside it. `Path.name` prevents deeper traversal.
 - Before fetching, require scheme `https` and a host of `tadpoles.com` or a subdomain of it. A failure is permanent and goes to `Failed/` (per 1.3).
 - After the redirect, reject an empty, `.` or `..` filename; it goes to `Failed/`.
@@ -296,6 +296,43 @@ Moving the files is a breaking change for your current setup, so it needs your c
 `appsscript.json` requests `https://www.googleapis.com/auth/drive`, which gives read/write access to **all** of Drive. `drive.file` is narrower, but it only covers files the script created or opened. The script would then need to create its own queue folder instead of opening an existing one by ID.
 
 Trade-off: a one-time setup change in return for a much smaller blast radius if the script is ever compromised.
+
+**Decision (agreed 2026-10-03):**
+- Narrow the Apps Script's Drive scope from `drive` to `drive.file`. After 1.7, the script only creates files, so the full scope is unnecessary. This removes a permission, and it ships with the 1.5 and 1.7 Apps Script rewrite.
+- Under `drive.file`, the script can only reach files it created. So it creates and owns its own queue folder, stored in a new Script Property, `queue_folder_id`.
+- The API behaviour (`DriveApp` under `drive.file`, the consent wording) was described from memory. It must be confirmed by Phase 0 before any production change.
+
+**Phase 0: test in a throwaway script (production untouched).** Create a new standalone Apps Script project whose manifest has only `drive.file`. Run a test function and check:
+1. The consent screen asks only for access to files the app uses.
+2. `DriveApp.createFolder("tadpoles-queue-spike")` succeeds, and the ID is logged.
+3. `folder.createFile("test.json", "[]", MimeType.JSON)` succeeds.
+4. In a later, separate run, `DriveApp.getFolderById(<saved id>).createFile(...)` succeeds. This is the critical check.
+5. `DriveApp.getFolderById(<current production queue folder id>)` fails with an access error.
+6. The spike folder and file appear in the local Drive sync, and Python can read them.
+
+Decision rule:
+- All pass: use `DriveApp` with `drive.file`.
+- Check 2, 3 or 4 fails: repeat with the Advanced Drive service under `drive.file`.
+- That also fails: keep `drive`, and record why in CLAUDE.md.
+
+Delete the spike project and folder afterwards. The test function and checklist are written as part of implementation; the user runs it in their Google account.
+
+**Phase 1: cutover (after Phase 0 passes), in this order:**
+1. Drain the old queue: run Python once and confirm `queue/` holds no unprocessed `*.json`.
+2. Record the last old-script run time from the Apps Script execution log.
+3. Deploy with `clasp push`: the `drive.file` manifest, plus code that creates its own queue folder on first run and stores the ID in `queue_folder_id`. Re-authorise.
+4. Seed `last_run_epoch` by hand with the time from step 2. Do not use the default "now minus 3 days" seed, which would re-queue emails the old script already handled and upload them twice.
+5. Dry run, then a real run. Check the log for the new folder ID and the queued emails.
+6. Wait for sync, update the scheduled `--queue-dir` to the new folder, and do one manual Python dry run against it.
+7. Delete the old `drive_folder_id` property. Keep the old folder as an archive, or delete it.
+
+Do the cutover between two scheduled runs. The seeded watermark prevents missed emails even if it slips a day; links last about 3 days.
+
+**Rollback:** `clasp push` the previous commit (old manifest and code), and restore the old `--queue-dir`. Files already in the new folder are complete and write-once; point Python at it once to drain them.
+
+- Documentation:
+  - README: a one-time migration section with the steps above, and how to re-authorise.
+  - CLAUDE.md: why `drive.file`, why the script owns its queue folder, the `queue_folder_id` property, and the watermark-seeding pitfall.
 
 ### 2.5 Low: CI hardening
 - Add `permissions: contents: read` at the top of `ci.yml`.
