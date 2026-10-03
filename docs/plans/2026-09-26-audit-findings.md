@@ -425,6 +425,30 @@ Only success is signalled now. If the provider is healthchecks.io-style, pinging
 
 The use of `sops` for one low-sensitivity URL is also heavy. An environment variable override (for example `TADPOLES_HEALTHCHECK_URL`) with `sops` as the fallback would make CI and headless hosts simpler.
 
+**Decision (agreed 2026-10-03):**
+- Provider: healthchecks.io. Behaviour confirmed from the Pinging API reference (https://healthchecks.io/docs/http_api/), as pasted by the user:
+  - Endpoints `/start`, `/fail`, `/log` and `/<exit-status>` (0 means success, anything else failure).
+  - A POST body is stored up to 100 kB (`Ping-Body-Limit` response header).
+  - `rid=<uuid>` pairs a start ping with its completion.
+  - UUID endpoints return `200` with the body `OK (not found)` or `OK (rate limited)` when the ping is ignored, so `raise_for_status()` cannot detect a bad URL.
+  - Rate limit: 5 pings a minute per check.
+- At run start, generate `rid = uuid4()` and POST `<url>/start?rid=<rid>`.
+- At run end, POST `<url>/<exit code>?rid=<rid>`, with the end-of-run summary as the body, truncated to the `Ping-Body-Limit` (100 kB). One call; the healthcheck always matches the process exit code.
+- Check that each response body is exactly `OK`. Anything else, or a network error, logs a warning. A ping failure never changes the run's exit code (today a ping error crashes the run after the work is done).
+- Dry run: no pings (1.8).
+- No environment-variable override for the URL; keep `sops`.
+- Dashboard (user action): cron schedule `0 20 * * *`, timezone `America/Los_Angeles`, grace period about 1 hour (currently 3 days). A 3-day grace period means a run that never starts alerts after about 4 days, which is past the 72-hour link TTL. `/fail` does not cover runs that never start, so the grace period still matters. With `/start`, the grace period also bounds the run time, which catches hangs.
+- Timing analysis: Apps Script fires daily within the 19:00 hour, Python runs at 20:00 (both America/Los_Angeles). Worst-case delay from email to upload is about 25 hours, so one missed day (about 49 hours) still fits within the 72-hour TTL. Edge case: a trigger firing late in the hour may not have synced by 20:00, which adds a day (about 49 hours, still within the TTL). Optional: move Python to 20:30 or 21:00.
+- Documentation:
+  - README: what each healthcheck state means (started, success, fail, late); the recommended dashboard settings and why (alerts must arrive before the 72-hour TTL); the recommended schedule ordering (Apps Script before Python).
+  - CLAUDE.md: the end ping uses the exit-code endpoint; `rid` pairs pings; a `200` whose body is not `OK` means the ping was ignored.
+- Verification:
+  - A successful run sends `/start`, then `/0` with the same `rid`.
+  - A failed run sends `/start`, then `/1` with the summary body.
+  - A response of `OK (not found)` logs a warning, and the exit code is unchanged.
+  - A network error on the ping does not fail the run.
+  - A dry run sends nothing.
+
 ---
 
 ## 4. Cleanup and tooling
