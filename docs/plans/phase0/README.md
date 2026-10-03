@@ -1,0 +1,40 @@
+# Phase 0: Apps Script behaviour checks
+
+Throwaway checks to run before changing the production Apps Script. They cover three assumptions in the audit plan (`docs/plans/2026-09-26-audit-findings.md`) that could not be verified from the analysis environment:
+
+- **2.4:** `DriveApp` works under the narrow `drive.file` scope.
+- **4.10:** how Gmail search matches a label that contains a space.
+- **1.5:** the `LockService` calls used by the run lock.
+
+Nothing here touches the production project or the production queue folder.
+
+## Setup
+1. Open https://script.new to create a new, standalone Apps Script project. Name it "tadpoles phase0 spike".
+2. Project Settings: tick "Show appsscript.json manifest file in editor".
+3. Replace the contents of `appsscript.json` with this folder's `appsscript.json`.
+4. Replace the contents of `Code.gs` with this folder's `Code.gs`.
+5. In `Code.gs`, set `PRODUCTION_FOLDER_ID` to the production project's `drive_folder_id` Script Property.
+6. In Gmail, create a label named `spike test` (with the space) and apply it to any one email.
+
+## Run each function separately, in order, and record the result
+
+| # | Function | Expected result | Result |
+|---|---|---|---|
+| 1 | (first run of anything) | The consent screen lists Drive access only to "specific Google Drive files that you use with this app", plus read-only Gmail. Note the exact wording. | |
+| 2 | `step1_createFolderAndFile` | The log shows the created folder ID and file. | |
+| 3 | `step2_reopenAndWrite` | Run it separately, after step 2. The log shows the folder reopened, a new file created, and both files listed. **This is the critical check.** | |
+| 4 | `step3_productionFolderIsNotReachable` | The log says `EXPECTED: production folder not reachable`. | |
+| 5 | Local Drive sync | The `tadpoles-queue-spike` folder and its JSON files appear on the machine that runs Python, and can be read. | |
+| 6 | `step4_labelQuoting` | The log shows which of `quoted`, `hyphenated` and `bare` finds at least 1 thread. | |
+| 7 | `step5_lockService` | The log shows `tryLock(1000) returned true; hasLock() = true`, then `hasLock() = false` after release. | |
+| 8 | `step6_cleanup` | The spike folder is in the Drive trash. | |
+
+Afterwards: delete the spike project, and remove the `spike test` label.
+
+## Decision rule (finding 2.4)
+- **Rows 2 to 4 pass:** the production rewrite uses `DriveApp` with `drive.file`.
+- **Row 2 or 3 fails:** repeat with the Advanced Drive service (Services > Drive API) under `drive.file`, before deciding.
+- **That also fails:** production keeps the full `drive` scope, and CLAUDE.md records why.
+- **Row 4 says `UNEXPECTED`:** the scope is not narrowing access, so investigate before relying on it.
+
+Paste the log output of each step back into the conversation, or fill in the Result column.
