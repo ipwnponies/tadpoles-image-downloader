@@ -239,6 +239,37 @@ A dry run only needs the redirect URL to get the filename. **Fix:** skip `resp.r
 - Documentation: none needed (invisible to the user).
 - Verification: entries with `"caption": null`, with the key missing, and with text. The first two become `""`; the third is kept.
 
+### 1.11 High: the local wrapper script and the new design do not fit together (found 2026-10-03)
+The scheduled job runs a fish wrapper that lives only on the user's machine:
+1. `git pull`.
+2. `rclone sync "gdrive:Data/tadpoles message queue" gdrive_queue/` (pull-only; the local copy is replaced each run).
+3. `poetry sync`, then `poetry run main main --queue-dir gdrive_queue/ --images-dir (mktemp -d /tmp/tadpoles.XXXXXX) --no-dry-run`. It stops if Python fails.
+4. `move_processed`: moves **every** `*.json` in the remote folder root to remote `Done/`.
+
+Problems:
+- a. Step 4 moves all remote JSON files, including any written during the run (for example by a manual Apps Script run). Those are moved to `Done/` without being processed: silent loss, today.
+- b. Python's outputs never reach the remote. After 1.3 and 3.2, `retry-*.json` and `Failed/*.json` are written locally, and the next `rclone sync` deletes them.
+- c. A non-zero Python exit stops the wrapper before step 4. After 3.2, a failed run has still uploaded the good photos, so the next run uploads them again (duplicates).
+- d. The healthcheck covers only Python. A failure in step 4 after a green ping goes unnoticed and causes duplicates.
+- e. `git pull` and `poetry sync` deploy every push to `main` automatically.
+
+**Decision (agreed 2026-10-03):**
+1. `rclone sync` down, as today.
+2. Run Python and keep its exit code; do not stop yet.
+3. Push outputs up whatever the exit code: `rclone copy` the run's local `retry-*.json` and `Failed/` into the remote folder.
+4. Move only what Python retired: for each file in the local `Done/` that still exists in the remote root, `rclone moveto` it into the remote `Done/`. Files that arrived mid-run stay queued.
+5. The healthcheck covers the whole cycle: Python sends `/start` and writes its summary to a file, but does not send the end ping. The wrapper ends with a new command, `poetry run main ping --exit-code <code> --body-file <summary>`, so the `sops` secret handling stays in Python. (This amends 3.4: the end ping moves from `main` to the wrapper.)
+6. The wrapper is versioned in the repo (for example `bin/run-cycle.fish`), so it changes and is tested together with the logic it must match.
+7. Deploy from a `latest` tag instead of `main`: release with `git tag -f latest <commit> && git push -f origin latest`, roll back by moving the tag back. The job runs `git fetch --tags --force && git checkout --detach latest`, then `poetry sync`. A small bootstrap that is not changed by the checkout does the fetch and checkout, then calls the repo wrapper, so the code that updates is never the code that is running.
+- Documentation:
+  - README: the full cycle (sync down, process, push outputs, move retired files, ping), the `latest` tag release and rollback steps, and the bootstrap.
+  - CLAUDE.md: the remote folder is the real state; Python works on a local copy; the wrapper mirrors exactly what Python retired; why the end ping lives in the wrapper.
+- Verification:
+  - A queue file added to the remote mid-run stays in the remote root after the cycle.
+  - A run with a retry and a dead-letter leaves `retry-*.json` and `Failed/*.json` in the remote, and they survive the next `rclone sync`.
+  - A run where Python exits non-zero still pushes outputs and moves the retired files, then ends with a failure ping.
+  - Moving `latest` back to an earlier commit makes the next run use that commit.
+
 ---
 
 ## 2. Security and credential handling
@@ -274,7 +305,7 @@ The output filename comes from the redirect path's `.name`. An empty result or `
 - Reject an empty or `..` filename.
 
 **Decision (agreed 2026-10-02):**
-- Severity lowered to Low. The Drive queue folder is not shared with anyone (confirmed 2026-10-03). Exploiting this needs write access to the Drive queue folder, which in practice means the Google account is already compromised. The fix is cheap defence in depth.
+- Severity lowered to Low. The Drive queue folder lives in the user's accountB and is shared only with the user's accountA, where the Apps Script runs (corrected 2026-10-03). Exploiting this needs write access to the Drive queue folder, which in practice means the Google account is already compromised. The fix is cheap defence in depth.
 - Tested: a final URL ending in `/` gives an empty name, and `(images_dir / "").with_suffix(".png")` writes `images.png` next to `images_dir`. A name of `..` gives `...png` inside it. `Path.name` prevents deeper traversal.
 - Before fetching, require scheme `https` and a host of `tadpoles.com` or a subdomain of it. A failure is permanent and goes to `Failed/` (per 1.3).
 - After the redirect, reject an empty, `.` or `..` filename; it goes to `Failed/`.
@@ -297,7 +328,9 @@ Moving the files is a breaking change for your current setup, so it needs your c
 
 Trade-off: a one-time setup change in return for a much smaller blast radius if the script is ever compromised.
 
-**Decision (agreed 2026-10-03):**
+**REOPENED (2026-10-03):** the Apps Script runs in accountA, but the queue folder lives in accountB and is shared with accountA. Under `drive.file` the script cannot reach that folder, and a folder it creates lands in accountA's Drive, where accountB's rclone does not look. Phase 0 so far, run in accountA: consent screen correct; `DriveApp` requires the full `drive` scope for any call (`Specified permissions are not sufficient to call DriveApp.createFolder. Required permissions: https://www.googleapis.com/auth/drive`); the Advanced Drive service (`Drive.*`, v3) under `drive.file` can create a folder and file, reopen the folder by ID in a later run, and list it; the production folder is not reachable (`File not found`); `LockService` behaves as 1.5 assumes; label search accepts `label:"name with space"` (use the quoted form; the email must not be in Spam). Open choice: keep `drive` (blast radius: accountA's Drive plus everything shared with accountA), or `drive.file` with the script sharing its own folder to accountB (needs more testing). Decided by what accountA's Drive holds. The original decision below is suspended.
+
+**Original decision (agreed 2026-10-03, suspended):**
 - Narrow the Apps Script's Drive scope from `drive` to `drive.file`. After 1.7, the script only creates files, so the full scope is unnecessary. This removes a permission, and it ships with the 1.5 and 1.7 Apps Script rewrite.
 - Under `drive.file`, the script can only reach files it created. So it creates and owns its own queue folder, stored in a new Script Property, `queue_folder_id`.
 - The API behaviour (`DriveApp` under `drive.file`, the consent wording) was described from memory. It must be confirmed by Phase 0 before any production change.
