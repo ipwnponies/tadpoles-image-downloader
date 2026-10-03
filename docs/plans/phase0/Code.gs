@@ -71,6 +71,20 @@ function step4_labelQuoting() {
   }
 }
 
+/** Finding 4.10 diagnostic: check the label exists and has threads, without using search. */
+function step4b_labelDiagnostic() {
+  const names = GmailApp.getUserLabels().map((label) => label.getName());
+  Logger.log(`Labels containing "spike": ${JSON.stringify(names.filter((n) => n.toLowerCase().includes("spike")))}`);
+
+  const label = GmailApp.getUserLabelByName(SPACED_LABEL);
+  if (!label) {
+    Logger.log(`No label named exactly "${SPACED_LABEL}"`);
+    return;
+  }
+  Logger.log(`getUserLabelByName("${SPACED_LABEL}").getThreads(0, 10) -> ${label.getThreads(0, 10).length} thread(s)`);
+  Logger.log(`label:"${SPACED_LABEL}" in:anywhere -> ${GmailApp.search(`label:"${SPACED_LABEL}" in:anywhere`).length} thread(s)`);
+}
+
 /** Finding 1.5: confirm the LockService calls the design relies on. */
 function step5_lockService() {
   const lock = LockService.getScriptLock();
