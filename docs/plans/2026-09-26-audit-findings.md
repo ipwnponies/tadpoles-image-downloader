@@ -489,6 +489,11 @@ There is no test suite. The riskiest logic is pure or easy to isolate:
 
 **Needs dependency approval:** `pytest` and `pytest-asyncio` as dev dependencies, plus a `make test` target and a CI step. The alternative with no new dependency is `unittest` with `IsolatedAsyncioTestCase`, which also works.
 
+**Decision (agreed 2026-10-03):**
+- Python (dependency change approved by the user): add `pytest` and `pytest-asyncio` to `[tool.poetry.group.dev.dependencies]`, and update `poetry.lock` with Poetry. Add a `make test` target and a `pytest` step in CI. Fake HTTP servers (Tadpoles, Photos, healthchecks.io) use `aiohttp.test_utils.TestServer`, which ships with aiohttp. Every decision's verification cases become tests; tables of cases use `parametrize`.
+- Apps Script: write the new logic as plain functions that take inputs and return outputs (watermark window and message filter from 1.5, run-file naming from 1.7, label quoting from 4.10, caption extraction from 1.10). Test them with Node's built-in runner (`node --test`), with no new dependency, plus an `npm test` script and CI step. Google API calls are covered by the dry runs in the plan, not by local tests.
+- Documentation: README and CLAUDE.md list `make test` and `npm test` alongside lint and typecheck. CLAUDE.md drops "There is no test suite".
+
 ---
 
 ## 6. Feature ideas (optional)
