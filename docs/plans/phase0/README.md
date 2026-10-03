@@ -13,7 +13,7 @@ Nothing here touches the production project or the production queue folder.
 2. Project Settings: tick "Show appsscript.json manifest file in editor".
 3. Replace the contents of `appsscript.json` with this folder's `appsscript.json`.
 4. Replace the contents of `Code.gs` with this folder's `Code.gs`.
-5. In `Code.gs`, set `PRODUCTION_FOLDER_ID` to the production project's `drive_folder_id` Script Property.
+5. Project Settings > Script Properties > Add script property: name `production_folder_id`, value copied from the production project's `drive_folder_id` property. The ID stays in project settings, never in code. Cleanup removes it.
 6. In Gmail, create a label named `spike test` (with the space) and apply it to any one email.
 
 ## Run each function separately, in order, and record the result
@@ -27,7 +27,7 @@ Nothing here touches the production project or the production queue folder.
 | 5 | Local Drive sync | The `tadpoles-queue-spike` folder and its JSON files appear on the machine that runs Python, and can be read. | |
 | 6 | `step4_labelQuoting` | The log shows which of `quoted`, `hyphenated` and `bare` finds at least 1 thread. | |
 | 7 | `step5_lockService` | The log shows `tryLock(1000) returned true; hasLock() = true`, then `hasLock() = false` after release. | |
-| 8 | `step6_cleanup` | The spike folder is in the Drive trash. | |
+| 8 | `step6_cleanup` | The spike folder is in the Drive trash, and the spike's Script Properties are removed. | |
 
 Afterwards: delete the spike project, and remove the `spike test` label.
 

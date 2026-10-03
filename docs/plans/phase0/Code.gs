@@ -6,9 +6,6 @@
  * See README.md in this folder for the checklist.
  */
 
-// Paste your current production queue folder ID here (Script Properties > drive_folder_id
-// in the production project). Used only for the negative check; nothing is written to it.
-const PRODUCTION_FOLDER_ID = "PASTE_PRODUCTION_FOLDER_ID_HERE";
 
 // A throwaway Gmail label containing a space, applied to at least one email (checklist step 6).
 const SPACED_LABEL = "spike test";
@@ -40,10 +37,18 @@ function step2_reopenAndWrite() {
   Logger.log(`Files visible in folder: ${names.join(", ")}`);
 }
 
-/** Check 5: the production folder must NOT be reachable under drive.file. */
+/**
+ * Check 5: the production folder must NOT be reachable under drive.file.
+ * Reads the folder ID from this spike project's Script Property `production_folder_id`,
+ * so the ID never appears in code. Nothing is written to that folder.
+ */
 function step3_productionFolderIsNotReachable() {
+  const productionFolderId = props.getProperty("production_folder_id");
+  if (!productionFolderId) {
+    throw new Error("Set the Script Property production_folder_id first (Project Settings > Script Properties)");
+  }
   try {
-    const folder = DriveApp.getFolderById(PRODUCTION_FOLDER_ID);
+    const folder = DriveApp.getFolderById(productionFolderId);
     Logger.log(`UNEXPECTED: production folder is reachable: ${folder.getName()}`);
   } catch (error) {
     Logger.log(`EXPECTED: production folder not reachable: ${error.message}`);
@@ -86,5 +91,6 @@ function step6_cleanup() {
   }
   DriveApp.getFolderById(id).setTrashed(true);
   props.deleteProperty("spike_folder_id");
-  Logger.log(`Trashed folder id=${id}`);
+  props.deleteProperty("production_folder_id");
+  Logger.log(`Trashed folder id=${id}; removed spike Script Properties`);
 }
