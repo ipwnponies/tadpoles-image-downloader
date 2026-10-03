@@ -1,6 +1,6 @@
 # Audit findings and proposed changes
 
-Status: **proposal, awaiting approval**. Nothing here has been implemented.
+Status: **triage complete (2026-10-03); implementation not started.** Every finding has an agreed Decision block. The implementation order is at the end of this document.
 
 Scope: full read of `tadpoles_image_downloader/`, `src/code.js`, `appsscript.json`, CI, tooling, and docs. Baseline `make lint`, `ruff format --check`, `make typecheck` all pass on `3b60aa4`.
 
@@ -502,31 +502,64 @@ There is no test suite. The riskiest logic is pure or easy to isolate:
 - **Run summary:** log counts at the end (fetched, deduped, written, uploaded, failed), and include them in the healthcheck ping body.
 - **Headless runner:** a systemd timer or launchd example, plus the credential-path change in 2.3.
 
+**Decision (agreed 2026-10-03):**
+- Video support: dropped. Tadpoles sends no videos.
+- Run summary: already decided (1.3 summary, sent as the healthcheck body in 3.4).
+- Scheduler example docs: skipped. The user already has a working schedule.
+- Upload into an album: skipped. The user tried adding uploads to an album before, and it did not work.
+
 ---
 
-## Proposed implementation batches
-Each batch is independently shippable and needs no new dependencies unless marked.
+## Implementation order
+Ordered so that each step ships on its own, and the riskiest data-loss fixes land first. Every step follows the documentation policy, and adds tests for the verification cases listed in its decisions. `make lint`, `make format`, `make typecheck`, `make test` and `npm test` must pass before each push.
 
-1. **Data safety:**
-   - 1.1 mint chunking and per-item results
-   - 1.2 lossless EXIF
-   - 1.4 caption key
-   - 2.1 gitignore and token file permissions
-   - 4.2 `.gitignore` cleanup
-2. **Resilience:**
-   - 1.3 per-entry failure isolation and queue rewrite
-   - 1.5 skip already-uploaded images and atomic writes
-   - 1.6 `RefreshError`
-   - 1.8 and 1.9 dry-run behavior
-   - 1.10 null caption
-   - 2.2 URL and filename validation
-3. **Apps Script:** 1.7 no silent overwrite, 4.9, 4.10. Optionally 3.1 (scope change, needs a decision).
-4. **Docs and CI:** 4.1, 2.5, CLAUDE.md gotcha updates.
-5. **Needs approval:** tests (section 5), the eslint fix (4.3), and the architecture items 3.2, 3.3, 3.4 and 2.3.
+The new Python works with both the old and the new Apps Script, because it processes every `queue/*.json`. So Python ships first, and the Apps Script follows after Phase 0.
 
-## Decisions needed
-- [ ] Approve batches 1–4?
-- [ ] 1.3: keep failed entries queued forever, or add a retry cap and a `Failed/` file?
-- [ ] 3.1: accept the `gmail.modify` scope for label-based state?
-- [ ] 2.3: move credentials to the config directory (breaks your current path)?
-- [ ] Section 5: `pytest` or stdlib `unittest`?
+**Step 1: foundations (no behaviour change)**
+- Test infrastructure: `pytest`, `pytest-asyncio`, `make test`, CI step (5).
+- mypy `strict = true` and its fixes (4.8).
+- `.gitignore` cleanup and `.beads/` deletion (2.1, 4.11).
+- CI: read-only token and the cache-key fix (2.5).
+- `logging.basicConfig` moved into a Typer callback (4.7).
+- `package.json` metadata (4.4); `eslint` 9, Apps Script globals, `npm run lint`, `npm test` with `node --test`, and CI jobs (4.3, 5).
+
+**Step 2: Google Photos and credentials (`cloud_storage.py`)**
+- `batchCreate` chunking, per-item results, `mint` returns created tokens (1.1).
+- No browser flow in scheduled runs; a separate `login` command (1.6).
+- Credential paths anchored to the repo root; token file written with `0600` (2.1).
+
+**Step 3: image writing (`write_image_file`)**
+- Lossless EXIF for JPEG and WebP, EXIF merge with date tags replaced, Pillow path for others with DPI and ICC kept (1.2).
+- Atomic writes (1.5); returns the written path (1.4).
+
+**Step 4: staged pipeline (`process_queue.py`)**
+- The stages from 3.2: load, pre-filter, de-duplicate, fetch, classify, write, upload, retire, report.
+- Within them: URL and filename validation (2.2); the 96-hour age rule, placeholder detection, and retry or dead-letter classification (1.3); captions keyed by the written file (1.4); null captions normalised (1.10); dry run runs every check but writes nothing (1.9).
+- Upload before retirement; one write-once retry file and `Failed/` file per run; temp `images_dir` deleted on success and kept on failure (3.2, 3.3).
+- Remove `--process-concurrency`.
+
+**Step 5: healthcheck and dry-run signalling**
+- `/start` and `/<exit code>` with `rid`, summary body, `OK` body check, ping failures never fail the run (3.4).
+- No pings on a dry run (1.8).
+
+**Step 6: Phase 0, the Drive scope test (user runs it; see 2.4)**
+- A throwaway Apps Script project with only `drive.file`. Its result decides `DriveApp`, the Advanced Drive service, or keeping `drive`.
+- Also check the Gmail label quoting with a throwaway label containing a space (4.10), and the `LockService` API against its documentation (1.5).
+
+**Step 7: Apps Script rewrite (after step 6)**
+- Watermark in Script Properties with the per-message filter and the 1-hour overlap; script lock (1.5).
+- Write-once queue files named by run time (1.7).
+- `extractCaption` returns `""` (1.10); `const` and exponential backoff (4.9); defensive label quoting (4.10).
+- Drive scope from the step 6 result (2.4).
+- Pure logic covered by `node --test`.
+
+**Step 8: Phase 1 cutover (user, with guidance; see 2.4)**
+- Drain the old queue, deploy, seed `last_run_epoch` with the last old run time, dry run, real run, point `--queue-dir` at the new folder.
+
+**Step 9: documentation pass**
+- Check that README, HEALTHCHECK.md and CLAUDE.md reflect every decision (4.1 and the documentation lines of each decision).
+
+**User actions outside the code (any time)**
+- Check Google Photos for 200x200 placeholder images already uploaded (1.3, 1.5).
+- healthchecks.io dashboard: cron schedule `0 20 * * *` in `America/Los_Angeles`, grace period about 1 hour (3.4).
+- Optional: move the Python run to 20:30 or 21:00 (3.4).
