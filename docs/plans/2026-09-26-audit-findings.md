@@ -277,6 +277,16 @@ Problems:
 6. The wrapper is versioned in the repo (for example `bin/run-cycle.fish`), so it changes and is tested together with the logic it must match.
 7. Deploy from a `latest` tag instead of `main`: release with `git tag -f latest <commit> && git push -f origin latest`, roll back by moving the tag back. The job runs `git fetch --tags --force && git checkout --detach latest`, then `poetry sync`. A small bootstrap that is not changed by the checkout does the fetch and checkout, then calls the repo wrapper, so the code that updates is never the code that is running.
 8. Switch-over order (decided 2026-10-04, plan review): the bootstrap and `latest` come first, before any implementation commit reaches `main` (implementation step 0). Tag `latest` at the commit production runs today. Until a release contains `bin/run-cycle.fish`, the bootstrap runs the legacy cycle itself (today's wrapper steps minus `git pull`); once the checked-out commit has `bin/run-cycle.fish`, it runs that instead. From then on, a push to `main` deploys nothing. Reason: the live wrapper runs `git pull` on `main`, and the user commits to `main`; the staged pipeline under the old wrapper would lose retries, re-upload photos and break the end ping.
+9. Release tags (decided 2026-10-04). Every release gets an immutable, annotated, date-named tag; only `latest` ever moves.
+   - Name: `release-YYYY-MM-DD`, with `.2`, `.3` for a second release on the same day. Semver was rejected (no consumers, so no compatibility contract to express); plain numbers were rejected (not self-describing).
+   - The tag message says why the release happens. The change set is computed, not written: `git log --oneline <prev>..<new>`. The message can be seeded with `git shortlog <prev>..HEAD | git tag -a release-NEW -F -`.
+   - `latest` points at the commit, not the tag object: `git tag -f latest release-X^{}`.
+   - Release: `git tag -a release-YYYY-MM-DD -m "<why>" <sha>`, `git tag -f latest release-YYYY-MM-DD^{}`, `git push origin release-YYYY-MM-DD`, `git push -f origin latest`.
+   - Current release: `git describe --tags --exact-match --match 'release-*' latest`.
+   - Previous release, without listing or date math: `git describe --tags --abbrev=0 --match 'release-*' latest^` (walks back from the commit before `latest` to the nearest `release-*` tag). This relies on releases being cut from `main`, so they form one line of history.
+   - Rollback one release: `set prev (git describe --tags --abbrev=0 --match 'release-*' latest^)`, `git tag -f latest $prev^{}`, `git push -f origin latest`. Repeating it steps back again.
+   - List: `git tag -l 'release-*' -n5`.
+10. Bootstrap location: preferably outside the repo (for example `~/.local/bin`). If the user keeps it at the old wrapper's path inside the checkout, it is excluded locally via `.git/info/exclude` under a name no commit will ever use (for example `bootstrap.local.fish`). Caveats recorded: git overwrites an ignored file if a checked-out commit tracks the same path, and `git clean -fdx` deletes it. Keep a copy of the old wrapper for rollback.
 - Documentation:
   - README: the full cycle (sync down, process, push outputs, move retired files, ping), the `latest` tag release and rollback steps, and the bootstrap.
   - CLAUDE.md: the remote folder is the real state; Python works on a local copy; the wrapper mirrors exactly what Python retired; why the end ping lives in the wrapper.
@@ -602,8 +612,8 @@ Ordered so that each step ships on its own, and the riskiest data-loss fixes lan
 The new Python works with both the old and the new Apps Script, because it processes every `queue/*.json`. So Python ships first, and the Apps Script follows after Phase 0.
 
 **Step 0: switch-over (user, before any implementation commit reaches `main`; see 1.11 item 8)**
-- Tag `latest` at the commit production runs today.
-- Replace the local wrapper with the bootstrap: fetch and check out `latest`, `poetry sync`, then run `bin/run-cycle.fish` if the commit has it, else the legacy cycle.
+- Tag the commit production runs today as the baseline release and point `latest` at it (1.11 item 9): `git tag -a release-2026-10-04 -m "baseline before audit work" origin/main`, `git tag latest release-2026-10-04^{}`, `git push origin release-2026-10-04 latest`.
+- Replace the local wrapper with the bootstrap (location per 1.11 item 10): fetch and check out `latest`, `poetry sync`, then run `bin/run-cycle.fish` if the commit has it, else the legacy cycle.
 - Run one cycle by hand.
 
 **Step 1: foundations (no behaviour change)**
@@ -634,7 +644,7 @@ The new Python works with both the old and the new Apps Script, because it proce
 - New `ping` command (`poetry run main ping --exit-code <code> --summary-file <path>`, with `main --summary-file <path>` carrying the `rid`); the end ping moves to the wrapper (1.11, amending 3.4).
 - No pings on a dry run (1.8).
 - Wrapper `bin/run-cycle.fish` checked into the repo: sync down, run Python and keep its exit code, push `retry-*.json` and `Failed/` up, move only the files Python retired (only if the push succeeded), then call `ping` with the combined exit code (1.11).
-- README documents the out-of-repo bootstrap (fetch the `latest` tag, check it out, run the wrapper) and the release and rollback steps.
+- README documents the bootstrap (fetch the `latest` tag, check it out, run the wrapper) and the release, rollback and tag-naming steps from 1.11 item 9.
 - Steps 4 and 5 deploy together: retries and dead-letters only reach Drive once the wrapper pushes them.
 - Release timing (decided 2026-10-04): steps 4 and 5 are released (`latest` moved) together with step 7, not before. Reason: the old script re-queues old thread messages (1.5); under step 4 they dead-letter as expired and turn every such run red, although nothing is lost.
 
