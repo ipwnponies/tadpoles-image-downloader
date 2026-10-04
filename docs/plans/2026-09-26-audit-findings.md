@@ -329,9 +329,40 @@ Moving the files is a breaking change for your current setup, so it needs your c
 
 Trade-off: a one-time setup change in return for a much smaller blast radius if the script is ever compromised.
 
-**REOPENED (2026-10-03):** the Apps Script runs in accountA, but the queue folder lives in accountB and is shared with accountA. Under `drive.file` the script cannot reach that folder, and a folder it creates lands in accountA's Drive, where accountB's rclone does not look. Phase 0 so far, run in accountA: consent screen correct; `DriveApp` requires the full `drive` scope for any call (`Specified permissions are not sufficient to call DriveApp.createFolder. Required permissions: https://www.googleapis.com/auth/drive`); the Advanced Drive service (`Drive.*`, v3) under `drive.file` can create a folder and file, reopen the folder by ID in a later run, and list it; the production folder is not reachable (`File not found`); `LockService` behaves as 1.5 assumes; label search accepts `label:"name with space"` (use the quoted form; the email must not be in Spam). Open choice: keep `drive` (blast radius: accountA's Drive plus everything shared with accountA), or `drive.file` with the script sharing its own folder to accountB (needs more testing). Decided by what accountA's Drive holds. The original decision below is suspended.
+**Decision (revised and agreed 2026-10-04): move the pipeline's Gmail side to accountB, with `drive.file`.**
+- Context:
+  - The Apps Script used to run in accountA, where Tadpoles emails arrive. The queue folder lives in accountB and was shared with accountA.
+  - accountA's address is handed out freely, so it attracts spam and phishing. Its Drive also holds sensitive data. So the script's reach into accountA must be minimised.
+  - accountB must need no special setup: the files must simply exist in accountB.
+- Phase 0 evidence (run in accountA, 2026-10-03):
+  - `DriveApp` requires the full `drive` scope for any call: `Specified permissions are not sufficient to call DriveApp.createFolder. Required permissions: https://www.googleapis.com/auth/drive`.
+  - The Advanced Drive service (`Drive.*`, v3) under `drive.file` can create a folder and a file, reopen the folder by ID in a later run, and list it.
+  - A folder the script did not create is unreachable (`File not found`), even when shared with the account. Reaching it would need a Google Picker grant, which needs a standard Google Cloud project; rejected as too much setup and ongoing risk.
+  - `LockService` behaves as 1.5 assumes. Label search accepts `label:"name with space"`; the email must not be in Spam.
+- Design:
+  - accountA: a Gmail filter applies the existing label **and forwards** Tadpoles emails to accountB (set up 2026-10-04). Forwarding of all mail stays disabled. accountA ends up with no script, no Drive access granted, and no share from accountB.
+  - accountB: a Gmail filter with the same criteria applies a label (and may skip the inbox). A new Apps Script project in accountB reads that label and writes queue files.
+  - Scopes in accountB: `gmail.readonly` and `drive.file`. Drive calls use the Advanced Drive service (`Drive.*`), never `DriveApp`.
+  - The script creates its own queue folder in accountB's My Drive on first run, and stores its ID in the Script Property `queue_folder_id`. accountB's rclone sees it directly.
+- Accepted trade-off (user, 2026-10-04): `gmail.readonly` cannot be limited to a label, so the script in accountB can read all of accountB's mail. In exchange, accountA's Drive is never exposed, and the script's Drive access is limited to its own folder.
+- Open checks before cutover:
+  1. Forwarding: the next real Tadpoles email arrives in accountB with the label, the original Tadpoles sender, the `https://www.tadpoles.com/m/p/...` links and caption intact, and a date matching accountA's copy within about a minute.
+  2. Spike re-run in accountB: `adv1` to `adv3` and cleanup, plus `rclone ls "gdrive:tadpoles-queue-spike-adv"` from the Python machine listing the files.
+- Cutover, in this order:
+  1. Complete both open checks.
+  2. Create the Apps Script project in accountB and deploy the rewritten script with `clasp`, logged in as accountB. Set `label_name` to accountB's label. Enable the Drive API advanced service (v3).
+  3. Seed `last_run_epoch` with the time of the last accountA run, so nothing is queued twice or skipped.
+  4. Disable the trigger in accountA, then create the daily 19:00 trigger in accountB. Never run both at once.
+  5. Dry run in accountB, then a real run; note the new queue folder's name and path.
+  6. Point the wrapper's `remote_dir` at the new folder (under accountB's `gdrive:` remote), and do one manual wrapper run.
+  7. After a few clean runs: delete accountA's script project, revoke its access in accountA's Google account settings, and stop sharing `tadpoles message queue` with accountA. Keep accountA's forwarding filter.
+- Rollback before step 7: re-enable accountA's trigger, disable accountB's, and restore the old `remote_dir`. Seed accountA's watermark the same way if 1.5 has already shipped there.
+- Mitigations kept: `clasp push` only by hand from a reviewed commit; the script stays small and covered by `node --test`; 2-step verification on both accounts.
+- Documentation:
+  - README: the two-account setup (forwarding filter in A, label filter and script in B), the cutover and rollback steps, and that the script can read accountB's mail.
+  - CLAUDE.md: never use `DriveApp` (it forces the full `drive` scope); the script only reaches folders it created; why the Picker route was rejected; why the script lives in accountB.
 
-**Original decision (agreed 2026-10-03, suspended):**
+**Superseded decision (2026-10-03), kept for history:**
 - Narrow the Apps Script's Drive scope from `drive` to `drive.file`. After 1.7, the script only creates files, so the full scope is unnecessary. This removes a permission, and it ships with the 1.5 and 1.7 Apps Script rewrite.
 - Under `drive.file`, the script can only reach files it created. So it creates and owns its own queue folder, stored in a new Script Property, `queue_folder_id`.
 - The API behaviour (`DriveApp` under `drive.file`, the consent wording) was described from memory. It must be confirmed by Phase 0 before any production change.
@@ -576,19 +607,19 @@ The new Python works with both the old and the new Apps Script, because it proce
 - `/start` and `/<exit code>` with `rid`, summary body, `OK` body check, ping failures never fail the run (3.4).
 - No pings on a dry run (1.8).
 
-**Step 6: Phase 0, the Drive scope test (user runs it; see 2.4)**
-- A throwaway Apps Script project with only `drive.file`. Its result decides `DriveApp`, the Advanced Drive service, or keeping `drive`.
-- Also check the Gmail label quoting with a throwaway label containing a space (4.10), and the `LockService` API against its documentation (1.5).
+**Step 6: accountB checks (user; see 2.4)**
+- Verify forwarding with the next real Tadpoles email.
+- Re-run the Drive spike (`docs/plans/phase0/`) in accountB, including the rclone listing.
 
 **Step 7: Apps Script rewrite (after step 6)**
 - Watermark in Script Properties with the per-message filter and the 1-hour overlap; script lock (1.5).
 - Write-once queue files named by run time (1.7).
-- `extractCaption` returns `""` (1.10); `const` and exponential backoff (4.9); defensive label quoting (4.10).
-- Drive scope from the step 6 result (2.4).
+- `extractCaption` returns `""` (1.10); `const` and exponential backoff (4.9); quoted label in the search (4.10).
+- Drive calls through the Advanced Drive service under `drive.file`; the script creates and owns its queue folder (2.4).
 - Pure logic covered by `node --test`.
 
-**Step 8: Phase 1 cutover (user, with guidance; see 2.4)**
-- Drain the old queue, deploy, seed `last_run_epoch` with the last old run time, dry run, real run, point `--queue-dir` at the new folder.
+**Step 8: cutover to accountB (user, with guidance; see 2.4)**
+- Follow the cutover order in 2.4: deploy to accountB, seed the watermark, switch triggers, point the wrapper at the new folder, then retire accountA's script and share.
 
 **Step 9: documentation pass**
 - Check that README, HEALTHCHECK.md and CLAUDE.md reflect every decision (4.1 and the documentation lines of each decision).
