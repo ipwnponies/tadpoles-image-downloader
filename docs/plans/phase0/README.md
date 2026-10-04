@@ -43,10 +43,18 @@ Afterwards: delete the spike project, and remove the `spike test` label.
 
 The same decision rule applies to rows 2 to 4, using the `adv*` functions.
 
-## Decision rule (finding 2.4)
-- **Rows 2 to 4 pass:** the production rewrite uses `DriveApp` with `drive.file`.
-- **Row 2 or 3 fails:** repeat with the Advanced Drive service (Services > Drive API) under `drive.file`, before deciding.
-- **That also fails:** production keeps the full `drive` scope, and CLAUDE.md records why.
-- **Row 4 says `UNEXPECTED`:** the scope is not narrowing access, so investigate before relying on it.
+## Results in accountA (2026-10-03)
+- Rows 2 to 4 pass with the Advanced Drive service (`adv1` to `adv3`); `DriveApp` needs the full scope.
+- Row 6: all three label forms match; use `label:"name"`. Search skips Spam.
+- Row 7: `LockService` passes.
+- Row 5 was not meaningful: the spike folder was created in accountA, which accountB's rclone does not see.
 
-Paste the log output of each step back into the conversation, or fill in the Result column.
+## Re-run in accountB (decision 2.4, revised 2026-10-04)
+The pipeline's Gmail side is moving to accountB. Repeat the Drive part there:
+1. Signed in as **accountB**, create a new project at https://script.new, and paste `appsscript.json`, `Code.gs` and `AdvancedDrive.gs` as before. Add the Drive API service (v3, identifier `Drive`).
+2. Run `adv1_createFolderAndFile`, then `adv2_reopenAndWrite` as a separate run.
+3. On the Python machine: `rclone ls "gdrive:tadpoles-queue-spike-adv"` must list `adv1.json` and the `adv2-...json` file.
+4. Run `adv6_cleanup` (skip `adv3`; there is no cross-account folder to test any more). It also deletes the `production_folder_id` property if one was set.
+5. Delete the spike project.
+
+Paste the logs and the `rclone ls` output back.
