@@ -1,6 +1,17 @@
 # Audit findings and proposed changes
 
-Status: **triage complete (2026-10-03); implementation not started.** Every finding has an agreed Decision block. The implementation order is at the end of this document.
+Status: **triage complete (2026-10-04); implementation not started.** Every finding has an agreed Decision block. The implementation order is at the end of this document.
+
+## Handoff (2026-10-04): read this first when resuming
+- Branch: `claude/dreamy-ritchie-wo7bs7`. Only docs, `docs/plans/phase0/` and one `.claspignore` line have changed; no application code yet.
+- Done by the user:
+  - Phase 0 spike in accountA: run, cleaned up, project deleted, `spike test` label removed.
+  - Gmail forwarding: accountA's Tadpoles filter now also forwards to accountB; accountB has a filter that applies the label.
+- Waiting on the user (they gate implementation steps 7 and 8 only):
+  1. Forwarding check with the next real Tadpoles email (label, original sender, links and caption intact, date matches accountA's copy).
+  2. Drive spike re-run in accountB: see "Re-run in accountB" in `docs/plans/phase0/README.md`. A reminder was scheduled for about 2026-10-06.
+- Next action for the agent: when the user says so, implement steps 1 to 5 of the implementation order, one commit per step, each with its tests, all checks passing before each push. Do not move the `latest` tag; releasing is the user's call.
+- Context the decisions rely on: the wrapper script runs from fish (see 1.11); the healthcheck provider is healthchecks.io (3.4); the job runs daily at 20:00 America/Los_Angeles and the Apps Script trigger at 19:00 (3.4).
 
 Scope: full read of `tadpoles_image_downloader/`, `src/code.js`, `appsscript.json`, CI, tooling, and docs. Baseline `make lint`, `ruff format --check`, `make typecheck` all pass on `3b60aa4`.
 
