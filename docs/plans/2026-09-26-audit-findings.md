@@ -603,9 +603,13 @@ The new Python works with both the old and the new Apps Script, because it proce
 - Upload before retirement; one write-once retry file and `Failed/` file per run; temp `images_dir` deleted on success and kept on failure (3.2, 3.3).
 - Remove `--process-concurrency`.
 
-**Step 5: healthcheck and dry-run signalling**
-- `/start` and `/<exit code>` with `rid`, summary body, `OK` body check, ping failures never fail the run (3.4).
+**Step 5: healthcheck, dry-run signalling and the wrapper**
+- `/start` from Python, `rid`, summary body written to a file, `OK` body check, ping failures never fail the run (3.4).
+- New `ping` command (`poetry run main ping --exit-code <code> --body-file <summary>`); the end ping moves to the wrapper (1.11, amending 3.4).
 - No pings on a dry run (1.8).
+- Wrapper `bin/run-cycle.fish` checked into the repo: sync down, run Python and keep its exit code, push `retry-*.json` and `Failed/` up, move only the files Python retired, then call `ping` (1.11).
+- README documents the out-of-repo bootstrap (fetch the `latest` tag, check it out, run the wrapper) and the release and rollback steps.
+- Steps 4 and 5 deploy together: retries and dead-letters only reach Drive once the wrapper pushes them.
 
 **Step 6: accountB checks (user; see 2.4)**
 - Verify forwarding with the next real Tadpoles email.
