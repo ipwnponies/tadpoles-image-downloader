@@ -10,7 +10,8 @@ Status: **triage complete (2026-10-04); implementation not started.** Every find
 - Waiting on the user (they gate implementation steps 7 and 8 only):
   1. Forwarding check with the next real Tadpoles email (label, original sender, links and caption intact, date matches accountA's copy).
   2. Drive spike re-run in accountB: see "Re-run in accountB" in `docs/plans/phase0/README.md`. A reminder was scheduled for about 2026-10-06.
-- Next action for the agent: when the user says so, implement steps 1 to 5 of the implementation order, one commit per step, each with its tests, all checks passing before each push. Do not move the `latest` tag; releasing is the user's call.
+- Next action for the agent: when the user says so, implement steps 1 to 5 of the implementation order, one commit per step, each with its tests, all checks passing before each push. Do not move the `latest` tag; releasing is the user's call. Step 0 (the user installs the bootstrap and creates `latest`) must happen before any of this reaches `main`.
+- Plan review (2026-10-04, `ce-doc-review`): fixes and decisions are folded into the sections below; see "Plan review (2026-10-04)" at the end for the summary and open observations.
 - Context the decisions rely on: the wrapper script runs from fish (see 1.11); the healthcheck provider is healthchecks.io (3.4); the job runs daily at 20:00 America/Los_Angeles and the Apps Script trigger at 19:00 (3.4).
 
 Scope: full read of `tadpoles_image_downloader/`, `src/code.js`, `appsscript.json`, CI, tooling, and docs. Baseline `make lint`, `ruff format --check`, `make typecheck` all pass on `3b60aa4`.
@@ -45,10 +46,10 @@ Worse, a successful HTTP response does not mean every item was created. Each ite
 - Treat an item as created only when its result in `newMediaItemResults` contains a `mediaItem`. Log each failed item with its filename and `status.message`.
 - `mint` returns the set of created upload tokens. The caller keeps a map from token to entry, so it knows exactly which entries were created.
 - **Revised 2026-10-03 (see 3.2):** `images_dir` is a fresh temp directory on every run, so it cannot hold retries. An entry whose upload failed becomes a retry entry in the queue (`retry-<run time>.json`), and the next run fetches and uploads it again while it is within 96 hours (1.3). The queue is the only durable state.
-- Any upload failure makes the run exit non-zero and skip the healthcheck ping. A missed ping is the alert.
+- Any upload failure makes the run exit non-zero. **Revised 2026-10-04 (see 3.4, 1.11):** a failed real run sends the non-zero exit-code ping with the summary body; it no longer skips the ping.
 - `upload_to_google_photos` returns only the upload token. The caption is attached at mint time.
 - Deferred: a quarantine for images that fail every time is decided with 1.3. An immediate `/fail` ping and a failure summary are decided with 3.4. Keeping captions for retried images is decided with 3.3.
-- Documentation: README says failed uploads are retried from the queue on the next run, and that a failure skips the healthcheck ping. CLAUDE.md records the 50-item `batchCreate` limit and the per-item result check.
+- Documentation: README says failed uploads are retried from the queue on the next run, and that a failure sends a failure ping (see 3.4). CLAUDE.md records the 50-item `batchCreate` limit and the per-item result check.
 - Verification: use a fake session with 120 tokens and one failed item. Expect 3 requests of 50, 50 and 20 items. Expect 119 entries reported as created, 1 entry written to the run's retry file, and a non-zero exit.
 
 ### 1.2 High: each JPEG is re-encoded at Pillow's default quality
@@ -95,7 +96,7 @@ Trade-off: a link that is permanently dead stays queued and keeps the healthchec
   - 200x200 dimensions **and** a size under 50 KB (high confidence; covers a re-encoded placeholder).
 - HTTP 4xx, a malformed entry, or a payload that is not an image goes to `Failed/` immediately. No videos are expected.
 - HTTP 5xx, a timeout, or a network error is retried on every run until the entry reaches 96 hours, then goes to `Failed/`. This replaces a fixed retry count.
-- Any failure or pending retry makes the run exit non-zero and skip the healthcheck ping.
+- Any failure or pending retry makes the run exit non-zero. **Revised 2026-10-04 (see 3.4, 1.11):** the run then sends the non-zero exit-code ping with the summary body instead of skipping the ping.
 - Logging:
   - Each failure logs the queue file, email time, `msgId`, URL, reason and age.
   - An end-of-run summary gives counts of fetched, written, uploaded, retried and dead-lettered entries, plus the paths of the `Failed/` files.
@@ -219,7 +220,7 @@ In `enqueue`, the `try` wraps both reading and `JSON.parse`, and the `catch` ass
 **Fix:** ping only after a real run with zero failures.
 
 **Decision (agreed 2026-10-02):**
-- Ping the healthcheck only after a real (non-dry) run with zero failures, consistent with 1.1 and 1.3.
+- Ping the healthcheck only after a real (non-dry) run with zero failures, consistent with 1.1 and 1.3. **Revised 2026-10-04 (see 3.4, 1.11):** a real run always ends with the exit-code ping (`/0` or non-zero); only a dry run sends no pings.
 - A dry run ends by logging `DRY RUN: nothing written or uploaded, healthcheck not pinged`, so its log cannot be mistaken for a real run.
 - A dry run no longer needs `sops` or the age key.
 - Risk this closes: dry run is the default, so a schedule that omits `--no-dry-run` would do nothing every day while the healthcheck stayed green, and photos would pass their TTL unnoticed.
@@ -228,8 +229,8 @@ In `enqueue`, the `try` wraps both reading and `JSON.parse`, and the `catch` ass
   - CLAUDE.md: replace the gotcha "it still pings the healthcheck URL unconditionally".
 - Verification:
   - A dry run does not call the ping and does not need `sops`.
-  - A real run with no failures pings.
-  - A real run with any failure does not ping.
+  - A real run with no failures sends `/0`.
+  - A real run with any failure sends the non-zero exit-code ping.
 
 ### 1.9 Low: dry run downloads full image bodies and discards them
 A dry run only needs the redirect URL to get the filename. **Fix:** skip `resp.read()` in dry run.
@@ -269,10 +270,13 @@ Problems:
 1. `rclone sync` down, as today.
 2. Run Python and keep its exit code; do not stop yet.
 3. Push outputs up whatever the exit code: `rclone copy` the run's local `retry-*.json` and `Failed/` into the remote folder.
-4. Move only what Python retired: for each file in the local `Done/` that still exists in the remote root, `rclone moveto` it into the remote `Done/`. Files that arrived mid-run stay queued.
-5. The healthcheck covers the whole cycle: Python sends `/start` and writes its summary to a file, but does not send the end ping. The wrapper ends with a new command, `poetry run main ping --exit-code <code> --body-file <summary>`, so the `sops` secret handling stays in Python. (This amends 3.4: the end ping moves from `main` to the wrapper.)
+4. Move only what Python retired: for each file in the local `Done/` that still exists in the remote root, `rclone moveto` it into the remote `Done/`. Files that arrived mid-run stay queued. **Only if step 3 succeeded (added 2026-10-04):** if pushing outputs fails, skip the move, so the sources stay queued and the next run redoes them (a duplicate, never a loss).
+5. The healthcheck covers the whole cycle: Python sends `/start` and writes its summary to a file, but does not send the end ping. The wrapper ends with a new command, `poetry run main ping --exit-code <code> --summary-file <path>`, so the `sops` secret handling stays in Python. (This amends 3.4: the end ping moves from `main` to the wrapper.)
+   - Exit code sent (added 2026-10-04): Python's code if non-zero, otherwise the first non-zero code from steps 3 and 4, otherwise 0.
+   - `rid` handoff (added 2026-10-04): the wrapper passes the same path to `main --summary-file <path>` and `ping --summary-file <path>`. `main` writes the `rid` there at start and adds the summary at the end. `ping` reads both. If the file or the `rid` is missing (Python crashed early), `ping` still sends `/<exit code>` without a `rid` and with the body `no summary: Python exited early`.
 6. The wrapper is versioned in the repo (for example `bin/run-cycle.fish`), so it changes and is tested together with the logic it must match.
 7. Deploy from a `latest` tag instead of `main`: release with `git tag -f latest <commit> && git push -f origin latest`, roll back by moving the tag back. The job runs `git fetch --tags --force && git checkout --detach latest`, then `poetry sync`. A small bootstrap that is not changed by the checkout does the fetch and checkout, then calls the repo wrapper, so the code that updates is never the code that is running.
+8. Switch-over order (decided 2026-10-04, plan review): the bootstrap and `latest` come first, before any implementation commit reaches `main` (implementation step 0). Tag `latest` at the commit production runs today. Until a release contains `bin/run-cycle.fish`, the bootstrap runs the legacy cycle itself (today's wrapper steps minus `git pull`); once the checked-out commit has `bin/run-cycle.fish`, it runs that instead. From then on, a push to `main` deploys nothing. Reason: the live wrapper runs `git pull` on `main`, and the user commits to `main`; the staged pipeline under the old wrapper would lose retries, re-upload photos and break the end ping.
 - Documentation:
   - README: the full cycle (sync down, process, push outputs, move retired files, ping), the `latest` tag release and rollback steps, and the bootstrap.
   - CLAUDE.md: the remote folder is the real state; Python works on a local copy; the wrapper mirrors exactly what Python retired; why the end ping lives in the wrapper.
@@ -280,7 +284,10 @@ Problems:
   - A queue file added to the remote mid-run stays in the remote root after the cycle.
   - A run with a retry and a dead-letter leaves `retry-*.json` and `Failed/*.json` in the remote, and they survive the next `rclone sync`.
   - A run where Python exits non-zero still pushes outputs and moves the retired files, then ends with a failure ping.
-  - Moving `latest` back to an earlier commit makes the next run use that commit.
+  - Moving `latest` back to an earlier commit makes the next run use that commit, including a commit without `bin/run-cycle.fish` (legacy cycle).
+  - With the `rclone copy` of outputs forced to fail, no source file is moved to remote `Done/`, and the ping is non-zero.
+  - A clean Python run followed by a failing `rclone moveto` ends with a non-zero ping.
+  - With the summary file missing, `ping` sends `/<exit code>` with the "exited early" body.
 
 ---
 
@@ -297,7 +304,7 @@ Problems:
 **Decision (agreed 2026-10-02):**
 - Checked: `token_photos.json` is not matched by `.gitignore`, and neither it nor `client.json` has ever been committed. Nothing leaked, and nothing needs rotating.
 - `.gitignore`: add `/token_photos.json`; remove the stale `/token_photos.pickle` and `worker/__pycache__`; add `__pycache__/`, `.venv/`, `.mypy_cache/`, `.ruff_cache/`. This absorbs 4.2.
-- Write the token file with owner-only permissions (`0600`).
+- Write the token file with owner-only permissions (`0600`). Every token write (login and refresh) writes a `0600` temp file in the repo root and moves it over `token_photos.json` with `os.replace`, so an existing `0644` file also ends up `0600` (refined 2026-10-04: a mode passed at open time only applies when the file is created).
 - Anchor `client.json` and `token_photos.json` to the repo root (`Path(__file__).parents[1]`), the same way `secrets.yaml` is found. Reason: after 1.6, `login` is run by hand. With paths relative to the working directory, running `login` from another directory would put the token where the scheduled job never looks. The scheduled job runs from the repo root, so no file moves. This absorbs 2.3.
 - Documentation:
   - README: `client.json` and `token_photos.json` live in the repo root, are secrets, are gitignored, and must never be committed. If one leaks, revoke access in the Google account and run `login`.
@@ -305,6 +312,7 @@ Problems:
 - Verification:
   - `git check-ignore token_photos.json` matches.
   - After `login`, `stat -c %a token_photos.json` prints `600`.
+  - A pre-existing token file with mode `0644` is `0600` after a refresh.
   - Running `login` and `main` from a directory other than the repo root reads and writes the token in the repo root.
 
 ### 2.2 Med: URLs from the queue are fetched without validation
@@ -317,7 +325,7 @@ The output filename comes from the redirect path's `.name`. An empty result or `
 - Reject an empty or `..` filename.
 
 **Decision (agreed 2026-10-02):**
-- Severity lowered to Low. The Drive queue folder lives in the user's accountB and is shared only with the user's accountA, where the Apps Script runs (corrected 2026-10-03). Exploiting this needs write access to the Drive queue folder, which in practice means the Google account is already compromised. The fix is cheap defence in depth.
+- Severity lowered to Low. The Drive queue folder lives in the user's accountB. Until the 2.4 cutover it is shared only with the user's accountA, where the Apps Script runs; after it, the script runs in accountB and the share is removed (corrected 2026-10-03, updated 2026-10-04). Exploiting this needs write access to the Drive queue folder, which in practice means the Google account is already compromised. The fix is cheap defence in depth.
 - Tested: a final URL ending in `/` gives an empty name, and `(images_dir / "").with_suffix(".png")` writes `images.png` next to `images_dir`. A name of `..` gives `...png` inside it. `Path.name` prevents deeper traversal.
 - Before fetching, require scheme `https` and a host of `tadpoles.com` or a subdomain of it. A failure is permanent and goes to `Failed/` (per 1.3).
 - After the redirect, reject an empty, `.` or `..` filename; it goes to `Failed/`.
@@ -361,22 +369,24 @@ Trade-off: a one-time setup change in return for a much smaller blast radius if 
   2. Spike re-run in accountB: `adv1` to `adv3` and cleanup, plus `rclone ls "gdrive:tadpoles-queue-spike-adv"` from the Python machine listing the files.
 - Cutover, in this order:
   1. Complete both open checks.
-  2. Create the Apps Script project in accountB and deploy the rewritten script with `clasp`, logged in as accountB. Set `label_name` to accountB's label. Enable the Drive API advanced service (v3).
-  3. Seed `last_run_epoch` with the time of the last accountA run, so nothing is queued twice or skipped.
+  2. Create the Apps Script project in accountB and deploy the rewritten script with `clasp`, logged in as accountB. Set `label_name` to accountB's label. The repo's `appsscript.json` declares the Drive v3 advanced service (`enabledAdvancedServices`), so `clasp push` enables it; confirm Drive v3 appears under Services. Never enable it only in the editor: the next `clasp push` would replace the manifest and remove it.
+  3. Seed `last_run_epoch` with the time of the last accountA run, so nothing is skipped. Accepted (2026-10-04): the forwarded copies have new message IDs, so `recent_msg_ids` cannot suppress the 1-hour overlap; emails from the hour before accountA's last run are uploaded twice (at most 1 or 2). This follows "duplicate, never a loss"; seeding 1 hour later was rejected because it could miss an email.
   4. Disable the trigger in accountA, then create the daily 19:00 trigger in accountB. Never run both at once.
   5. Dry run in accountB, then a real run; note the new queue folder's name and path.
-  6. Point the wrapper's `remote_dir` at the new folder (under accountB's `gdrive:` remote), and do one manual wrapper run.
+  6. Move every `*.json` left in the old folder's root (including `retry-*.json`) into the new folder's root with `rclone moveto`, and confirm the old root holds none. Then point the wrapper's `remote_dir` at the new folder (under accountB's `gdrive:` remote), and do one manual wrapper run.
   7. After a few clean runs: delete accountA's script project, revoke its access in accountA's Google account settings, and stop sharing `tadpoles message queue` with accountA. Keep accountA's forwarding filter.
-- Rollback before step 7: re-enable accountA's trigger, disable accountB's, and restore the old `remote_dir`. Seed accountA's watermark the same way if 1.5 has already shipped there.
+- Rollback before step 7: re-enable accountA's trigger, disable accountB's, move every `*.json` from the new folder's root back to the old root, and restore the old `remote_dir`. Seed accountA's watermark the same way if 1.5 has already shipped there.
 - Mitigations kept: `clasp push` only by hand from a reviewed commit; the script stays small and covered by `node --test`; 2-step verification on both accounts.
 - Documentation:
   - README: the two-account setup (forwarding filter in A, label filter and script in B), the cutover and rollback steps, and that the script can read accountB's mail.
-  - CLAUDE.md: never use `DriveApp` (it forces the full `drive` scope); the script only reaches folders it created; why the Picker route was rejected; why the script lives in accountB.
+  - CLAUDE.md: never use `DriveApp` (it forces the full `drive` scope); the script only reaches folders it created; why the Picker route was rejected; why the script lives in accountB; the Drive advanced service must stay declared in `appsscript.json`.
 
 **Superseded decision (2026-10-03), kept for history:**
 - Narrow the Apps Script's Drive scope from `drive` to `drive.file`. After 1.7, the script only creates files, so the full scope is unnecessary. This removes a permission, and it ships with the 1.5 and 1.7 Apps Script rewrite.
 - Under `drive.file`, the script can only reach files it created. So it creates and owns its own queue folder, stored in a new Script Property, `queue_folder_id`.
 - The API behaviour (`DriveApp` under `drive.file`, the consent wording) was described from memory. It must be confirmed by Phase 0 before any production change.
+
+*Superseded (2026-10-03/04), kept for history: the Phase 0, Phase 1, Rollback and Documentation blocks below describe the old accountA `DriveApp` design. The live cutover and documentation are the ones above.*
 
 **Phase 0: test in a throwaway script (production untouched).** Create a new standalone Apps Script project whose manifest has only `drive.file`. Run a test function and check:
 1. The consent screen asks only for access to files the app uses.
@@ -519,7 +529,7 @@ The use of `sops` for one low-sensitivity URL is also heavy. An environment vari
   - README: what each healthcheck state means (started, success, fail, late); the recommended dashboard settings and why (alerts must arrive before the 72-hour TTL); the recommended schedule ordering (Apps Script before Python).
   - CLAUDE.md: the end ping uses the exit-code endpoint; `rid` pairs pings; a `200` whose body is not `OK` means the ping was ignored.
 - Verification:
-  - A successful run sends `/start`, then `/0` with the same `rid`.
+  - A successful run sends `/start`, then `/0` with the same `rid` (across the `main` and `ping` invocations, via the summary file; see 1.11).
   - A failed run sends `/start`, then `/1` with the summary body.
   - A response of `OK (not found)` logs a warning, and the exit code is unchanged.
   - A network error on the ping does not fail the run.
@@ -546,7 +556,7 @@ The use of `sops` for one low-sensitivity URL is also heavy. An environment vari
 **Decisions for section 4 (agreed 2026-10-03):**
 - Already covered: 4.2 by 2.1; 4.5 by 1.1 (`upload_to_google_photos` returns only the token); 4.6 by the 1.2 rewrite of `write_image_file`.
 - 4.1: rewrite `HEALTHCHECK.md` for `sops` and `secrets.yaml` (key location, `sops edit`, rotating the age key with `sops updatekeys`), and add the 3.4 dashboard settings.
-- 4.3 (dependency change approved by the user): bump `eslint` to 9 in `package.json` and regenerate `package-lock.json` with npm. Replace `globals.browser` with Apps Script globals (`GmailApp`, `DriveApp`, `PropertiesService`, `LockService`, `Utilities`, `Logger`, `MimeType`). Add an `npm run lint` script and a CI job that runs it.
+- 4.3 (dependency change approved by the user): bump `eslint` to 9 in `package.json` and regenerate `package-lock.json` with npm. Replace `globals.browser` with Apps Script globals (`GmailApp`, `Drive`, `PropertiesService`, `LockService`, `Utilities`, `Logger`). `DriveApp` is left out on purpose, so lint flags any use of it (2.4; revised 2026-10-04). Add an `npm run lint` script and a CI job that runs it.
 - 4.4: `package.json` license `ISC` becomes `MIT` (matching `LICENSE`); remove `"main": "index.js"`; add a description. Metadata only.
 - 4.7: move `logging.basicConfig` into a Typer `@app.callback()`, so importing the module has no side effects.
 - 4.8: set `strict = true` in the mypy config and fix what it flags. Update the CLAUDE.md "strict-ish" wording.
@@ -567,7 +577,7 @@ There is no test suite. The riskiest logic is pure or easy to isolate:
 
 **Decision (agreed 2026-10-03):**
 - Python (dependency change approved by the user): add `pytest` and `pytest-asyncio` to `[tool.poetry.group.dev.dependencies]`, and update `poetry.lock` with Poetry. Add a `make test` target and a `pytest` step in CI. Fake HTTP servers (Tadpoles, Photos, healthchecks.io) use `aiohttp.test_utils.TestServer`, which ships with aiohttp. Every decision's verification cases become tests; tables of cases use `parametrize`.
-- Apps Script: write the new logic as plain functions that take inputs and return outputs (watermark window and message filter from 1.5, run-file naming from 1.7, label quoting from 4.10, caption extraction from 1.10). Test them with Node's built-in runner (`node --test`), with no new dependency, plus an `npm test` script and CI step. Google API calls are covered by the dry runs in the plan, not by local tests.
+- Apps Script: write the new logic as plain functions that take inputs and return outputs (watermark window and message filter from 1.5, run-file naming from 1.7, label quoting from 4.10, caption extraction from 1.10). Test them with Node's built-in runner (`node --test`), with no new dependency, plus an `npm test` script and CI step. Wiring (added 2026-10-04): tests live in `test/`, and `.claspignore` gets `test/**` so `clasp push` never ships them (Apps Script runs every file's top level, so a `require` would break every run). `src/code.js` reads Script Properties inside functions, not at top level, and ends with a guarded `if (typeof module !== "undefined") module.exports = {...}` so Node can load it. Google API calls are covered by the dry runs in the plan, not by local tests.
 - Documentation: README and CLAUDE.md list `make test` and `npm test` alongside lint and typecheck. CLAUDE.md drops "There is no test suite".
 
 ---
@@ -590,6 +600,11 @@ There is no test suite. The riskiest logic is pure or easy to isolate:
 Ordered so that each step ships on its own, and the riskiest data-loss fixes land first. Every step follows the documentation policy, and adds tests for the verification cases listed in its decisions. `make lint`, `make format`, `make typecheck`, `make test` and `npm test` must pass before each push.
 
 The new Python works with both the old and the new Apps Script, because it processes every `queue/*.json`. So Python ships first, and the Apps Script follows after Phase 0.
+
+**Step 0: switch-over (user, before any implementation commit reaches `main`; see 1.11 item 8)**
+- Tag `latest` at the commit production runs today.
+- Replace the local wrapper with the bootstrap: fetch and check out `latest`, `poetry sync`, then run `bin/run-cycle.fish` if the commit has it, else the legacy cycle.
+- Run one cycle by hand.
 
 **Step 1: foundations (no behaviour change)**
 - Test infrastructure: `pytest`, `pytest-asyncio`, `make test`, CI step (5).
@@ -616,11 +631,12 @@ The new Python works with both the old and the new Apps Script, because it proce
 
 **Step 5: healthcheck, dry-run signalling and the wrapper**
 - `/start` from Python, `rid`, summary body written to a file, `OK` body check, ping failures never fail the run (3.4).
-- New `ping` command (`poetry run main ping --exit-code <code> --body-file <summary>`); the end ping moves to the wrapper (1.11, amending 3.4).
+- New `ping` command (`poetry run main ping --exit-code <code> --summary-file <path>`, with `main --summary-file <path>` carrying the `rid`); the end ping moves to the wrapper (1.11, amending 3.4).
 - No pings on a dry run (1.8).
-- Wrapper `bin/run-cycle.fish` checked into the repo: sync down, run Python and keep its exit code, push `retry-*.json` and `Failed/` up, move only the files Python retired, then call `ping` (1.11).
+- Wrapper `bin/run-cycle.fish` checked into the repo: sync down, run Python and keep its exit code, push `retry-*.json` and `Failed/` up, move only the files Python retired (only if the push succeeded), then call `ping` with the combined exit code (1.11).
 - README documents the out-of-repo bootstrap (fetch the `latest` tag, check it out, run the wrapper) and the release and rollback steps.
 - Steps 4 and 5 deploy together: retries and dead-letters only reach Drive once the wrapper pushes them.
+- Release timing (decided 2026-10-04): steps 4 and 5 are released (`latest` moved) together with step 7, not before. Reason: the old script re-queues old thread messages (1.5); under step 4 they dead-letter as expired and turn every such run red, although nothing is lost.
 
 **Step 6: accountB checks (user; see 2.4)**
 - Verify forwarding with the next real Tadpoles email.
@@ -631,7 +647,8 @@ The new Python works with both the old and the new Apps Script, because it proce
 - Write-once queue files named by run time (1.7).
 - `extractCaption` returns `""` (1.10); `const` and exponential backoff (4.9); quoted label in the search (4.10).
 - Drive calls through the Advanced Drive service under `drive.file`; the script creates and owns its queue folder (2.4).
-- Pure logic covered by `node --test`.
+- Pure logic covered by `node --test` (wiring in 5).
+- `appsscript.json`: scopes `gmail.readonly` and `drive.file`, and the Drive v3 advanced service under `dependencies.enabledAdvancedServices`.
 
 **Step 8: cutover to accountB (user, with guidance; see 2.4)**
 - Follow the cutover order in 2.4: deploy to accountB, seed the watermark, switch triggers, point the wrapper at the new folder, then retire accountA's script and share.
@@ -643,3 +660,25 @@ The new Python works with both the old and the new Apps Script, because it proce
 - Check Google Photos for 200x200 placeholder images already uploaded (1.3, 1.5).
 - healthchecks.io dashboard: cron schedule `0 20 * * *` in `America/Los_Angeles`, grace period about 1 hour (3.4).
 - Optional: move the Python run to 20:30 or 21:00 (3.4).
+
+---
+
+## Plan review (2026-10-04)
+Reviewed with `ce-doc-review` (coherence, feasibility, security, scope, adversarial). Applied with the user's approval:
+- Failed real runs send the non-zero exit-code ping; only dry runs skip pings (1.1, 1.3, 1.8 marked revised).
+- Wrapper: moving retired sources depends on the output push succeeding; the end ping reflects `rclone` failures; `rid` and summary pass through `--summary-file` (1.11, 3.4).
+- Cutover moves leftover queue files between folders, and rollback mirrors it (2.4).
+- Token writes go through a `0600` temp file and `os.replace` (2.1).
+- Apps Script: tests in `test/` excluded by `.claspignore`, guarded exports, Drive advanced service in the manifest, ESLint globals `Drive` not `DriveApp` (2.4, 4.3, 5, step 7).
+- Superseded 2.4 blocks labelled; 2.2 sharing premise updated.
+
+Decided by the user:
+- Step 0: bootstrap and `latest` before anything reaches `main` (1.11 item 8).
+- Cutover seed stays at accountA's last run; up to 1 hour of duplicates accepted (2.4).
+- Steps 4 and 5 are released together with step 7 (implementation order).
+
+Open observations (not decided; raise when implementing the relevant step):
+- If `queue_folder_id` is set but the folder cannot be opened, the script should throw (no file, no watermark advance), not create a new folder. A silent new folder would fork the queue with no alert. Relevant to step 7.
+- If forwarding or accountB's label filter stops, the queue is empty and the healthcheck stays green. Nothing in the plan detects "no photos flowing".
+- The shortest link lifetime is unmeasured (only "about 3 days" and "dead at 96 hours"). The 3.4 "one missed day fits" margin assumes 72 hours.
+- `piexif.insert` on WebP is unverified; Tadpoles sends PNG and JPEG.
